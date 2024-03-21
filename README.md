@@ -5,8 +5,8 @@
   </p>
   <p>
     <img src="https://github.com/0vercl0k/kdmp-parser-rs/raw/main/pics/kdmp-parser.gif" />
-    <a href="https://crates.io/crates/kdmp-parser-rs"><img src="https://img.shields.io/crates/v/kdmp-parser-rs.svg" /></a>
-    <a href="https://docs.rs/kdmp-parser-rs/"><img src="https://docs.rs/kdmp-parser-rs/badge.svg"></a>
+    <a href="https://crates.io/crates/kdmp-parser"><img src="https://img.shields.io/crates/v/kdmp-parser.svg" /></a>
+    <a href="https://docs.rs/kdmp-parser/"><img src="https://docs.rs/kdmp-parser/badge.svg"></a>
     <img src="https://github.com/0vercl0k/kdmp-parser-rs/workflows/Builds/badge.svg"/>
   </p>
 </div>
