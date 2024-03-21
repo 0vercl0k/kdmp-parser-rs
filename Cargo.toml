@@ -1,15 +1,14 @@
 [package]
 name = "kdmp-parser"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Axel '0vercl0k' Souchet"]
 categories = ["parser-implementations"]
-description = "A Rust crate for parsing Windows kernel crashdumps"
+description = "A KISS Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger."
 include = [
     "/Cargo.toml",
     "/LICENSE",
     "/src/**",
-    "/examples/**",
     "README.md",
 ]
 keywords = ["windows", "kernel", "crashdump"]

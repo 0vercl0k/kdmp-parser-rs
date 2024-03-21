@@ -101,6 +101,11 @@ jobs:
           TESTDATAS: "."
         run: cargo test
 
+      - name: cargo test release
+        env:
+          TESTDATAS: "."
+        run: cargo test --release
+
       - name: cargo check
         run: cargo check
 

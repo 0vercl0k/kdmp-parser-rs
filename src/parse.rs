@@ -398,7 +398,8 @@ impl<'reader> KernelDumpParser<'reader> {
                     KdmpParserError::Overflow("overflow when computing pfn in bitmap")
                 })?;
 
-                debug_assert!(physmem.insert(pa, page_offset).is_none());
+                let insert = physmem.insert(pa, page_offset);
+                debug_assert!(insert.is_none());
                 page_offset = page_offset.checked_add(Page::size()).ok_or_else(|| {
                     KdmpParserError::BitmapPageOffsetOverflow(bitmap_idx, bit_idx)
                 })?;
@@ -484,7 +485,8 @@ impl<'reader> KernelDumpParser<'reader> {
             for page_idx in 0..pfn_range.number_of_pages {
                 let gpa = gpa_from_pfn_range(&pfn_range, page_idx)
                     .ok_or_else(|| KdmpParserError::Overflow("overflow w/ pfn_range"))?;
-                debug_assert!(physmem.insert(gpa, page_offset).is_none());
+                let insert = physmem.insert(gpa, page_offset);
+                debug_assert!(insert.is_none());
                 page_offset = page_offset
                     .checked_add(Page::size())
                     .ok_or_else(|| KdmpParserError::Overflow("overflow w/ page_offset"))?;
