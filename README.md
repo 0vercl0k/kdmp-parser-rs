@@ -18,7 +18,7 @@ Compiled binaries are available in the [releases](https://github.com/0vercl0k/kd
 ## Parser
 The [parser](src/examples/parser.rs) application is a small utility to show-case how to use the library and demonstrate its features. You can use it to dump memory, etc.
 
-![parser-usage](https://github.com/0vercl0k/kdmp-parser-rs/raw/main/pics/parser-usage.gif)
+![parser-usage](https://github.com/0vercl0k/kdmp-parser-rs/raw/main/pics/parser.gif)
 
 Here are the options supported:
 ```text
