@@ -1,0 +1,117 @@
+name: Builds
+
+on: [push, pull_request]
+
+jobs:
+  testdatas:
+    env:
+      TESTDATA_URL: https://github.com/0vercl0k/kdmp-parser/releases/download/v0.1/testdatas.7z
+
+    name: fetch testdatas
+    runs-on: ubuntu-latest
+    steps:
+    - name: Cache Artifacts
+      id: cache-testdatas
+      uses: actions/cache@v4
+      with:
+        key: kdmp-parser-testdatas-cache
+        path: .
+    - if: steps.cache-testdatas.outputs.cache-hit != 'true'
+      run: |
+        sudo apt-get -y update; sudo apt-get install -y p7zip-full;
+        curl ${{ env.TESTDATA_URL }}  -O -L
+        7z x testdatas.7z; rm testdatas.7z
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        if-no-files-found: error
+        name: kdmp-parser-testdatas-cache
+        path: .
+
+  fmt:
+    runs-on: ubuntu-latest
+    name: fmt
+    steps:
+      - name: Checkout 
+        uses: actions/checkout@v4
+
+      - name: Set up rust
+        run: rustup default nightly
+
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: cargo fmt
+        run: cargo +nightly fmt --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 
+        uses: actions/checkout@v4
+
+      - name: Set up rust
+        run: rustup default stable
+
+      - name: cargo clippy
+        env:
+          RUSTFLAGS: "-Dwarnings"
+        run: cargo clippy --example parser
+
+  doc:
+    name: doc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 
+        uses: actions/checkout@v4
+
+      - name: Set up rust
+        run: rustup default stable
+
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: "-Dwarnings"
+        run: cargo doc
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    needs: testdatas
+    runs-on: ${{ matrix.os }}
+    name: build & test / ${{ matrix.os }}
+    steps:
+      - name: Checkout 
+        uses: actions/checkout@v4
+
+      - name: Set up rust
+        run: rustup default stable
+
+      - name: Retrieve testdatas
+        uses: actions/download-artifact@v4
+        with:
+          name: kdmp-parser-testdatas-cache
+          path: .
+
+      - name: cargo test
+        env:
+          TESTDATAS: "."
+        run: cargo test
+
+      - name: cargo check
+        run: cargo check
+
+      - name: cargo build
+        run: cargo build --release --example parser
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: parser-${{ matrix.os }}
+          path: |
+            target/release/examples/parser.exe
+            target/release/examples/parser.pdb
+            target/release/examples/parser
