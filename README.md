@@ -40,6 +40,9 @@ Options:
   -m, --mem[=<MEM>]
           Dump the first `len` bytes of every physical pages, unless an address is specified
 
+      --virt
+          The address specified is interpreted as a virtual address, not a physical address
+
       --len <LEN>
           [default: 16]
 
