@@ -3,7 +3,7 @@ use core::default::Default;
 use std::fs::File;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use kdmp_parser::{Gpa, Gva, Gxa, KernelDumpParser, MappedFileReader};
 
@@ -41,6 +41,9 @@ struct Args {
     /// Reader mode.
     #[arg(short, long, value_enum, default_value_t = ReaderMode::Mmap)]
     reader: ReaderMode,
+    /// Dump the list of kernel & user modules.
+    #[arg(long, default_value_t = false)]
+    modules: bool,
 }
 
 /// Print a hexdump of data that started at `address`.
@@ -98,14 +101,18 @@ fn main() -> Result<()> {
         println!("{:#x?}", parser.exception_record());
     }
 
+    if args.modules {
+        for (at, module) in parser.kernel_modules() {
+            println!("{:#x}-{:#x}: {module}", at.start.u64(), at.end.u64());
+        }
+    }
+
     if let Some(addr) = args.mem {
         let mut buffer = vec![0; args.len];
         let addr = to_hex(&addr)?;
         if addr == u64::MAX {
             for (gpa, _) in parser.physmem() {
-                parser
-                    .phys_read_exact(gpa, &mut buffer)
-                    .ok_or_else(|| anyhow!("failed to read {gpa}"))?;
+                parser.phys_read_exact(gpa, &mut buffer)?;
                 hexdump(gpa.u64(), &buffer)
             }
         } else {
@@ -115,7 +122,7 @@ fn main() -> Result<()> {
                 parser.phys_read(Gpa::new(addr), &mut buffer)
             };
 
-            if let Some(amount) = amount {
+            if let Ok(amount) = amount {
                 hexdump(addr, &buffer[..amount]);
             } else {
                 println!(

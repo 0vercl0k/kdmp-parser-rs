@@ -1,9 +1,12 @@
 // Axel '0vercl0k' Souchet - February 25 2024
 //! This has all the parsing logic for parsing kernel crash-dumps.
+use core::slice;
 use std::cell::RefCell;
 use std::cmp::min;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
+use std::ops::Range;
 use std::path::Path;
 use std::{io, mem};
 
@@ -13,8 +16,8 @@ use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
     read_struct, BmpHeader64, Context, DumpType, ExceptionRecord64, FullRdmpHeader64, Header64,
-    KernelRdmpHeader64, Page, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun,
-    HEADER64_EXPECTED_SIGNATURE, HEADER64_EXPECTED_VALID_DUMP,
+    KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange, PhysmemDesc, PhysmemMap,
+    PhysmemRun, UnicodeString, HEADER64_EXPECTED_SIGNATURE, HEADER64_EXPECTED_VALID_DUMP,
 };
 use crate::{Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
@@ -34,6 +37,245 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
 }
 
+/// Translate a [`Gpa`] into a file offset of where the content of the page
+/// resides in.
+fn phys_translate(physmem: &PhysmemMap, gpa: Gpa) -> Result<u64> {
+    let offset = *physmem
+        .get(&gpa.page_align())
+        .ok_or_else(|| KdmpParserError::PhysTranslate(gpa))?;
+
+    offset
+        .checked_add(gpa.offset())
+        .ok_or_else(|| KdmpParserError::Overflow("w/ gpa offset"))
+}
+
+/// Read physical memory starting at `gpa` into a `buffer`.
+fn phys_read(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    gpa: Gpa,
+    buffer: &mut [u8],
+) -> Result<usize> {
+    // Amount of bytes left to read.
+    let mut amount_left = buffer.len();
+    // Total amount of bytes that we have successfully read.
+    let mut total_read = 0;
+    // The current gpa we are reading from.
+    let mut addr = gpa;
+    // Let's try to read as much as the user wants.
+    while amount_left > 0 {
+        // Translate the gpa into a file offset..
+        let phy_offset = phys_translate(physmem, addr)?;
+        // ..and seek the reader there.
+        reader.seek(io::SeekFrom::Start(phy_offset))?;
+        // We need to take care of reads that straddle different physical memory pages.
+        // So let's figure out the maximum amount of bytes we can read off this page.
+        // Either, we read it until its end, or we stop if the user wants us to read
+        // less.
+        let left_in_page = (Page::size() - gpa.offset()) as usize;
+        let amount_wanted = min(amount_left, left_in_page);
+        // Figure out where we should read into.
+        let slice = &mut buffer[total_read..total_read + amount_wanted];
+        // Read the physical memory!
+        let amount_read = reader.read(slice)?;
+        // Update the total amount of read bytes and how much work we have left.
+        total_read += amount_read;
+        amount_left -= amount_read;
+        // If we couldn't read as much as we wanted, we're done.
+        if amount_read != amount_wanted {
+            return Ok(total_read);
+        }
+
+        // We have more work to do, so let's move to the next page.
+        addr = addr.next_aligned_page();
+    }
+
+    // Yay, we read as much bytes as the user wanted!
+    Ok(total_read)
+}
+
+/// Read an exact amount of physical memory starting at `gpa` into a
+/// `buffer`.
+fn phys_read_exact(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    gpa: Gpa,
+    buffer: &mut [u8],
+) -> Result<()> {
+    // Read physical memory.
+    let len = phys_read(reader, physmem, gpa, buffer)?;
+
+    // If we read as many bytes as we wanted, then it's a win..
+    if len == buffer.len() {
+        Ok(())
+    }
+    // ..otherwise, we call it quits.
+    else {
+        Err(KdmpParserError::PartialPhysRead)
+    }
+}
+
+fn phys_read8(reader: &mut impl Reader, physmem: &PhysmemMap, gpa: Gpa) -> Result<u64> {
+    let mut buffer = [0; mem::size_of::<u64>()];
+    phys_read_exact(reader, physmem, gpa, &mut buffer)?;
+
+    Ok(u64::from_le_bytes(buffer))
+}
+
+/// Translate a [`Gva`] into a [`Gpa`].
+fn virt_translate(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    table_base: Gpa,
+    gva: Gva,
+) -> Result<Gpa> {
+    // Aligning in case PCID bits are set (bits 11:0)
+    let pml4_base = table_base.page_align();
+    let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
+    let pml4e = Pxe::from(phys_read8(reader, physmem, pml4e_gpa)?);
+    if !pml4e.present() {
+        return Err(KdmpParserError::VirtTranslate(gva));
+    }
+
+    let pdpt_base = pml4e.pfn.gpa();
+    let pdpte_gpa = Gpa::new(pdpt_base.u64() + (gva.pdpe_idx() * 8));
+    let pdpte = Pxe::from(phys_read8(reader, physmem, pdpte_gpa)?);
+    if !pdpte.present() {
+        return Err(KdmpParserError::VirtTranslate(gva));
+    }
+
+    // huge pages:
+    // 7 (PS) - Page size; must be 1 (otherwise, this entry references a page
+    // directory; see Table 4-1
+    let pd_base = pdpte.pfn.gpa();
+    if pdpte.large_page() {
+        return Ok(Gpa::new(pd_base.u64() + (gva.u64() & 0x3fff_ffff)));
+    }
+
+    let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
+    let pde = Pxe::from(phys_read8(reader, physmem, pde_gpa)?);
+    if !pde.present() {
+        return Err(KdmpParserError::VirtTranslate(gva));
+    }
+
+    // large pages:
+    // 7 (PS) - Page size; must be 1 (otherwise, this entry references a page
+    // table; see Table 4-18
+    let pt_base = pde.pfn.gpa();
+    if pde.large_page() {
+        return Ok(Gpa::new(pt_base.u64() + (gva.u64() & 0x1f_ffff)));
+    }
+
+    let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
+    let pte = Pxe::from(phys_read8(reader, physmem, pte_gpa)?);
+    if !pte.present() {
+        return Err(KdmpParserError::VirtTranslate(gva));
+    }
+
+    let page_base = pte.pfn.gpa();
+
+    Ok(Gpa::new(page_base.u64() + gva.offset()))
+}
+
+/// Read virtual memory starting at `gva` into a `buffer`.
+fn virt_read(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    table_base: Gpa,
+    gva: Gva,
+    buffer: &mut [u8],
+) -> Result<usize> {
+    // Amount of bytes left to read.
+    let mut amount_left = buffer.len();
+    // Total amount of bytes that we have successfully read.
+    let mut total_read = 0;
+    // The current gva we are reading from.
+    let mut addr = gva;
+    // Let's try to read as much as the user wants.
+    while amount_left > 0 {
+        // We need to take care of reads that straddle different virtual memory pages.
+        // So let's figure out the maximum amount of bytes we can read off this page.
+        // Either, we read it until its end, or we stop if the user wants us to read
+        // less.
+        let left_in_page = (Page::size() - addr.offset()) as usize;
+        let amount_wanted = min(amount_left, left_in_page);
+        // Figure out where we should read into.
+        let slice = &mut buffer[total_read..total_read + amount_wanted];
+        // Translate the gva into a gpa..
+        let gpa = virt_translate(reader, physmem, table_base, addr)?;
+        // .. and read the physical memory!
+        let amount_read = phys_read(reader, physmem, gpa, slice)?;
+        // Update the total amount of read bytes and how much work we have left.
+        total_read += amount_read;
+        amount_left -= amount_read;
+        // If we couldn't read as much as we wanted, we're done.
+        if amount_read != amount_wanted {
+            return Ok(total_read);
+        }
+
+        // We have more work to do, so let's move to the next page.
+        addr = addr.next_aligned_page();
+    }
+
+    // Yay, we read as much bytes as the user wanted!
+    Ok(total_read)
+}
+
+/// Read virtual memory starting at `gva`
+fn virt_read_exact(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    table_base: Gpa,
+    gva: Gva,
+    buffer: &mut [u8],
+) -> Result<()> {
+    // Read virtual memory.
+    let len = virt_read(reader, physmem, table_base, gva, buffer)?;
+
+    // If we read as many bytes as we wanted, then it's a win..
+    if len == buffer.len() {
+        Ok(())
+    }
+    // ..otherwise, we call it quits.
+    else {
+        Err(KdmpParserError::PartialVirtRead)
+    }
+}
+
+/// Read a `T` from the cursor.
+fn virt_read_struct<T>(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    table_base: Gpa,
+    gva: Gva,
+) -> Result<T> {
+    let mut s = mem::MaybeUninit::uninit();
+    let size_of_s = mem::size_of_val(&s);
+    let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr() as *mut u8, size_of_s) };
+
+    virt_read_exact(reader, physmem, table_base, gva, slice_over_s)?;
+
+    Ok(unsafe { s.assume_init() })
+}
+
+fn virt_read_unicode_string(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    table_base: Gpa,
+    unicode_str: &UnicodeString,
+) -> Result<String> {
+    let mut buffer = vec![0; unicode_str.length.into()];
+    virt_read_exact(
+        reader,
+        physmem,
+        table_base,
+        unicode_str.buffer.into(),
+        &mut buffer,
+    )?;
+
+    Ok(String::from_utf8(buffer)?)
+}
+
 /// A kernel dump parser that gives access to the physical memory space stored
 /// in the dump. It also offers virtual to physical memory translation as well
 /// as a virtual read facility.
@@ -50,6 +292,7 @@ pub struct KernelDumpParser<'reader> {
     /// The [`Reader`] object that allows us to seek / read the dump file which
     /// could be memory mapped, read from a file, etc.
     reader: RefCell<Box<dyn Reader + 'reader>>,
+    kernel_modules: HashMap<Range<Gva>, String>,
 }
 
 impl<'reader> Debug for KernelDumpParser<'reader> {
@@ -85,6 +328,56 @@ impl<'reader> KernelDumpParser<'reader> {
             headers.context_record_buffer.as_slice(),
         ))?);
 
+        // Walk the `PsLoadedModuleList` to extract the kernel modules.
+        let mut kernel_modules = HashMap::new();
+        let table_base = Gpa::from(headers.directory_table_base);
+        // Read the first LIST_ENTRY - it is a dummy node, so grab the next address off
+        // of it.
+        let head_addr = Gva::from(headers.ps_loaded_module_list);
+        let entry = virt_read_struct::<ListEntry>(&mut reader, &physmem, table_base, head_addr)?;
+        let mut entry_addr = entry.flink.into();
+        // We'll walk it until we hit the starting point (it is circular).
+        while entry_addr != head_addr {
+            // Read the table entry..
+            let data = virt_read_struct::<LdrDataTableEntry>(
+                &mut reader,
+                &physmem,
+                table_base,
+                entry_addr,
+            )?;
+
+            // ..and read it. I've seen dumps where the `full_dll_name` UNICODE_STRING have
+            // a `buffer` member that points to an invalid virtual address. In
+            // that case, we'll attempt to read the `base_dll_name` as a
+            // recovery mechanism. If this one fails as well, well we got
+            // nothing left.
+            let dll_name = match virt_read_unicode_string(
+                &mut reader,
+                &physmem,
+                table_base,
+                &data.full_dll_name,
+            ) {
+                Ok(o) => Ok(o),
+                e @ Err(KdmpParserError::VirtTranslate(_)) => e,
+                Err(e) => return Err(e),
+            }
+            .or_else(|_| {
+                virt_read_unicode_string(&mut reader, &physmem, table_base, &data.base_dll_name)
+            })?;
+
+            // Turn it into a string and shove it into the hash map.
+            let dll_end_addr = data
+                .dll_base
+                .checked_add(data.size_of_image.into())
+                .ok_or_else(|| KdmpParserError::Overflow("kernel module address"))?;
+            let at = data.dll_base.into()..dll_end_addr.into();
+            let inserted = kernel_modules.insert(at, dll_name);
+            debug_assert!(inserted.is_none());
+
+            // Go to the next entry.
+            entry_addr = data.in_load_order_links.flink.into();
+        }
+
         let reader: RefCell<Box<dyn Reader>> = RefCell::new(Box::new(reader));
 
         Ok(Self {
@@ -93,6 +386,7 @@ impl<'reader> KernelDumpParser<'reader> {
             headers,
             physmem,
             reader,
+            kernel_modules,
         })
     }
 
@@ -119,8 +413,16 @@ impl<'reader> KernelDumpParser<'reader> {
         }
     }
 
+    /// Physical memory map that maps page aligned [`Gpa`] to `offset` where the
+    /// content of the page can be found. The offset is relevant with the
+    /// associated `reader`.
     pub fn physmem(&self) -> impl ExactSizeIterator<Item = (Gpa, u64)> + '_ {
         self.physmem.iter().map(|(&k, &v)| (k, v))
+    }
+
+    /// Kernel modules loaded when the dump was taken.
+    pub fn kernel_modules(&self) -> impl ExactSizeIterator<Item = (&Range<Gva>, &str)> + '_ {
+        self.kernel_modules.iter().map(|(k, v)| (k, v.as_str()))
     }
 
     /// What kind of dump is it?
@@ -138,187 +440,62 @@ impl<'reader> KernelDumpParser<'reader> {
         &self.context
     }
 
-    /// Translate a [`Gpa`] into a file offset of where the content of the page
-    /// resides in.
-    fn phys_translate(&self, gpa: Gpa) -> Option<u64> {
-        let offset = *self.physmem.get(&gpa.page_align())?;
-
-        offset.checked_add(gpa.offset())
-    }
-
-    fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
-        Ok(self.reader.borrow_mut().seek(pos)?)
-    }
-
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        Ok(self.reader.borrow_mut().read(buf)?)
-    }
-
     /// Read physical memory starting at `gpa` into a `buffer`.
-    pub fn phys_read(&self, gpa: Gpa, buffer: &mut [u8]) -> Option<usize> {
-        // Amount of bytes left to read.
-        let mut amount_left = buffer.len();
-        // Total amount of bytes that we have successfully read.
-        let mut total_read = 0;
-        // The current gpa we are reading from.
-        let mut addr = gpa;
-        // Let's try to read as much as the user wants.
-        while amount_left > 0 {
-            // Translate the gpa into a file offset..
-            let phy_offset = self.phys_translate(addr)?;
-            // ..and seek the reader there.
-            self.seek(io::SeekFrom::Start(phy_offset)).ok()?;
-            // We need to take care of reads that straddle different physical memory pages.
-            // So let's figure out the maximum amount of bytes we can read off this page.
-            // Either, we read it until its end, or we stop if the user wants us to read
-            // less.
-            let left_in_page = (Page::size() - gpa.offset()) as usize;
-            let amount_wanted = min(amount_left, left_in_page);
-            // Figure out where we should read into.
-            let slice = &mut buffer[total_read..total_read + amount_wanted];
-            // Read the physical memory!
-            let amount_read = self.read(slice).ok()?;
-            // Update the total amount of read bytes and how much work we have left.
-            total_read += amount_read;
-            amount_left -= amount_read;
-            // If we couldn't read as much as we wanted, we're done.
-            if amount_read != amount_wanted {
-                return Some(total_read);
-            }
-
-            // We have more work to do, so let's move to the next page.
-            addr = addr.next_aligned_page();
-        }
-
-        // Yay, we read as much bytes as the user wanted!
-        Some(total_read)
+    pub fn phys_read(&self, gpa: Gpa, buffer: &mut [u8]) -> Result<usize> {
+        phys_read(
+            &mut self.reader.borrow_mut().as_mut(),
+            &self.physmem,
+            gpa,
+            buffer,
+        )
     }
 
     /// Read an exact amount of physical memory starting at `gpa` into a
     /// `buffer`.
-    pub fn phys_read_exact(&self, gpa: Gpa, buffer: &mut [u8]) -> Option<()> {
-        // Read physical memory.
-        let len = self.phys_read(gpa, buffer)?;
-
-        // If we read as many bytes as we wanted, then it's a win..
-        if len == buffer.len() {
-            Some(())
-        }
-        // ..otherwise, we call it quits.
-        else {
-            None
-        }
+    pub fn phys_read_exact(&self, gpa: Gpa, buffer: &mut [u8]) -> Result<()> {
+        phys_read_exact(
+            &mut self.reader.borrow_mut().as_mut(),
+            &self.physmem,
+            gpa,
+            buffer,
+        )
     }
 
     /// Read a `u64` in physical memory at `gpa`.
-    pub fn phys_read8(&self, gpa: Gpa) -> Option<u64> {
-        let mut buffer = [0; mem::size_of::<u64>()];
-        self.phys_read_exact(gpa, &mut buffer)?;
-
-        Some(u64::from_le_bytes(buffer))
-    }
-
-    /// Read virtual memory starting at `gva` into a `buffer`.
-    pub fn virt_read(&self, gva: Gva, buffer: &mut [u8]) -> Option<usize> {
-        // Amount of bytes left to read.
-        let mut amount_left = buffer.len();
-        // Total amount of bytes that we have successfully read.
-        let mut total_read = 0;
-        // The current gva we are reading from.
-        let mut addr = gva;
-        // Let's try to read as much as the user wants.
-        while amount_left > 0 {
-            // We need to take care of reads that straddle different virtual memory pages.
-            // So let's figure out the maximum amount of bytes we can read off this page.
-            // Either, we read it until its end, or we stop if the user wants us to read
-            // less.
-            let left_in_page = (Page::size() - addr.offset()) as usize;
-            let amount_wanted = min(amount_left, left_in_page);
-            // Figure out where we should read into.
-            let slice = &mut buffer[total_read..total_read + amount_wanted];
-            // Translate the gva into a gpa..
-            let gpa = self.virt_translate(addr)?;
-            // .. and read the physical memory!
-            let amount_read = self.phys_read(gpa, slice)?;
-            // Update the total amount of read bytes and how much work we have left.
-            total_read += amount_read;
-            amount_left -= amount_read;
-            // If we couldn't read as much as we wanted, we're done.
-            if amount_read != amount_wanted {
-                return Some(total_read);
-            }
-
-            // We have more work to do, so let's move to the next page.
-            addr = addr.next_aligned_page();
-        }
-
-        // Yay, we read as much bytes as the user wanted!
-        Some(total_read)
-    }
-
-    /// Read virtual memory starting at `gva`
-    pub fn virt_read_exact(&self, gva: Gva, buffer: &mut [u8]) -> Option<()> {
-        // Read virtual memory.
-        let len = self.virt_read(gva, buffer)?;
-
-        // If we read as many bytes as we wanted, then it's a win..
-        if len == buffer.len() {
-            Some(())
-        }
-        // ..otherwise, we call it quits.
-        else {
-            None
-        }
+    pub fn phys_read8(&self, gpa: Gpa) -> Result<u64> {
+        phys_read8(&mut self.reader.borrow_mut().as_mut(), &self.physmem, gpa)
     }
 
     /// Translate a [`Gva`] into a [`Gpa`].
-    pub fn virt_translate(&self, gva: Gva) -> Option<Gpa> {
-        // Aligning in case PCID bits are set (bits 11:0)
-        let pml4_base = Gpa::from(self.headers.directory_table_base).page_align();
-        let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
-        let pml4e = Pxe::from(self.phys_read8(pml4e_gpa)?);
-        if !pml4e.present() {
-            return None;
-        }
+    pub fn virt_translate(&self, gva: Gva) -> Result<Gpa> {
+        virt_translate(
+            &mut self.reader.borrow_mut().as_mut(),
+            &self.physmem,
+            Gpa::from(self.headers.directory_table_base),
+            gva,
+        )
+    }
 
-        let pdpt_base = pml4e.pfn.gpa();
-        let pdpte_gpa = Gpa::new(pdpt_base.u64() + (gva.pdpe_idx() * 8));
-        let pdpte = Pxe::from(self.phys_read8(pdpte_gpa)?);
-        if !pdpte.present() {
-            return None;
-        }
+    /// Read virtual memory starting at `gva` into a `buffer`.
+    pub fn virt_read(&self, gva: Gva, buffer: &mut [u8]) -> Result<usize> {
+        virt_read(
+            &mut self.reader.borrow_mut().as_mut(),
+            &self.physmem,
+            Gpa::from(self.headers.directory_table_base),
+            gva,
+            buffer,
+        )
+    }
 
-        // huge pages:
-        // 7 (PS) - Page size; must be 1 (otherwise, this entry references a page
-        // directory; see Table 4-1
-        let pd_base = pdpte.pfn.gpa();
-        if pdpte.large_page() {
-            return Some(Gpa::new(pd_base.u64() + (gva.u64() & 0x3fff_ffff)));
-        }
-
-        let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
-        let pde = Pxe::from(self.phys_read8(pde_gpa)?);
-        if !pde.present() {
-            return None;
-        }
-
-        // large pages:
-        // 7 (PS) - Page size; must be 1 (otherwise, this entry references a page
-        // table; see Table 4-18
-        let pt_base = pde.pfn.gpa();
-        if pde.large_page() {
-            return Some(Gpa::new(pt_base.u64() + (gva.u64() & 0x1f_ffff)));
-        }
-
-        let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
-        let pte = Pxe::from(self.phys_read8(pte_gpa)?);
-        if pte.large_page() {
-            return None;
-        }
-
-        let page_base = pte.pfn.gpa();
-
-        Some(Gpa::new(page_base.u64() + gva.offset()))
+    /// Read virtual memory starting at `gva`
+    pub fn virt_read_exact(&self, gva: Gva, buffer: &mut [u8]) -> Result<()> {
+        virt_read_exact(
+            &mut self.reader.borrow_mut().as_mut(),
+            &self.physmem,
+            Gpa::from(self.headers.directory_table_base),
+            gva,
+            buffer,
+        )
     }
 
     /// Build the physical memory map for a [`DumpType::Full`] dump.
@@ -394,9 +571,8 @@ impl<'reader> KernelDumpParser<'reader> {
                 }
 
                 // Calculate where the page is.
-                let pa = gpa_from_bitmap(bitmap_idx, bit_idx).ok_or_else(|| {
-                    KdmpParserError::Overflow("overflow when computing pfn in bitmap")
-                })?;
+                let pa = gpa_from_bitmap(bitmap_idx, bit_idx)
+                    .ok_or_else(|| KdmpParserError::Overflow("pfn in bitmap"))?;
 
                 let insert = physmem.insert(pa, page_offset);
                 debug_assert!(insert.is_none());
@@ -484,17 +660,17 @@ impl<'reader> KernelDumpParser<'reader> {
 
             for page_idx in 0..pfn_range.number_of_pages {
                 let gpa = gpa_from_pfn_range(&pfn_range, page_idx)
-                    .ok_or_else(|| KdmpParserError::Overflow("overflow w/ pfn_range"))?;
+                    .ok_or_else(|| KdmpParserError::Overflow("w/ pfn_range"))?;
                 let insert = physmem.insert(gpa, page_offset);
                 debug_assert!(insert.is_none());
                 page_offset = page_offset
                     .checked_add(Page::size())
-                    .ok_or_else(|| KdmpParserError::Overflow("overflow w/ page_offset"))?;
+                    .ok_or_else(|| KdmpParserError::Overflow("w/ page_offset"))?;
             }
 
             page_count = page_count
                 .checked_add(pfn_range.number_of_pages)
-                .ok_or_else(|| KdmpParserError::Overflow("overflow w/ page_count"))?;
+                .ok_or_else(|| KdmpParserError::Overflow("w/ page_count"))?;
         }
 
         Ok(physmem)

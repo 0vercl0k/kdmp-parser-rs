@@ -60,7 +60,7 @@ pub struct ExceptionRecord64 {
     pub exception_record: u64,
     pub exception_address: u64,
     pub number_parameters: u32,
-    __unused_alignment: u32,
+    unused_alignment1: u32,
     pub exception_information: [u64; 15],
 }
 
@@ -83,25 +83,16 @@ pub struct Header64 {
     pub machine_image_type: u32,
     pub number_processors: u32,
     pub bug_check_code: u32,
-    __padding0: u32,
+    padding1: u32,
     pub bug_check_code_parameters: [u64; 4],
     pub version_user: [u8; 32],
     pub kd_debugger_data_block: u64,
-    //   /* 0x0088 */ union DUMP_HEADER64_0 {
-    //     PHYSMEM_DESC PhysicalMemoryBlock;
-    //     std::array<uint8_t, 700> PhysicalMemoryBlockBuffer;
-    //   } u1;
     pub physical_memory_block_buffer: [u8; 700],
-    // 0x0344
-    __padding1: u32,
-    //   /* 0x0348 */ union CONTEXT_RECORD64_0 {
-    //     CONTEXT ContextRecord;
-    //     std::array<uint8_t, 3000> ContextRecordBuffer;
-    //   } u2;
+    padding2: u32,
     pub context_record_buffer: [u8; 3_000],
     pub exception: ExceptionRecord64,
     pub dump_type: u32,
-    __padding2: u32,
+    padding3: u32,
     pub required_dump_space: i64,
     pub system_time: i64,
     pub comment: [u8; 128],
@@ -111,12 +102,12 @@ pub struct Header64 {
     pub product_type: u32,
     pub suite_mask: u32,
     pub writer_status: u32,
-    __unused0: u8,
+    unused1: u8,
     pub kd_secondary_version: u8,
-    __unused1: [u8; 2],
+    unused2: [u8; 2],
     pub attributes: u32,
     pub boot_id: u32,
-    __reserved0: [u8; 4008],
+    reserved1: [u8; 4008],
 }
 
 impl Debug for Header64 {
@@ -170,7 +161,7 @@ pub struct BmpHeader64 {
     //    )]],
     // # The offset of the first page in the file.
     // 'FirstPage': [0x20, ['unsigned long long']],
-    pub __padding0: [u8; 0x20 - (0x4 + mem::size_of::<u32>())],
+    padding1: [u8; 0x20 - (0x4 + mem::size_of::<u32>())],
     /// The offset of the first page in the file.
     pub first_page: u64,
     /// Total number of pages present in the bitmap.
@@ -215,7 +206,7 @@ impl PhysmemRun {
 #[repr(C)]
 pub struct PhysmemDesc {
     pub number_of_runs: u32,
-    __padding0: u32,
+    padding1: u32,
     pub number_of_pages: u64,
     // PHYSMEM_RUN Run[1]; follows
 }
@@ -392,6 +383,35 @@ pub struct FullRdmpHeader64 {
 pub struct PfnRange {
     pub page_file_number: u64,
     pub number_of_pages: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct ListEntry {
+    pub flink: u64,
+    pub blink: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct UnicodeString {
+    pub length: u16,
+    pub maximum_length: u16,
+    pub buffer: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct LdrDataTableEntry {
+    pub in_load_order_links: ListEntry,
+    pub in_memory_order_links: ListEntry,
+    pub in_initialization_order_links: ListEntry,
+    pub dll_base: u64,
+    pub entry_point: u64,
+    pub size_of_image: u32,
+    reserved1: u32,
+    pub full_dll_name: UnicodeString,
+    pub base_dll_name: UnicodeString,
 }
 
 #[cfg(test)]
