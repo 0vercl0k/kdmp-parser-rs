@@ -9,7 +9,7 @@ mod pxe;
 mod structs;
 
 pub use bits::Bits;
-pub use error::KdmpParserError;
+pub use error::{KdmpParserError, NotPresetPxe, Result};
 pub use gxa::{Gpa, Gva, Gxa};
 pub use map::{MappedFileReader, Reader};
 pub use parse::KernelDumpParser;
