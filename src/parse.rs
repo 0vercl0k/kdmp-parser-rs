@@ -11,13 +11,14 @@ use std::path::Path;
 use std::{io, mem};
 
 use crate::bits::Bits;
-use crate::error::{NotPresetPxe, Result};
+use crate::error::{PxeNotPresent, Result};
 use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
-    read_struct, BmpHeader64, Context, DumpType, ExceptionRecord64, FullRdmpHeader64, Header64,
-    KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange, PhysmemDesc, PhysmemMap,
-    PhysmemRun, UnicodeString, HEADER64_EXPECTED_SIGNATURE, HEADER64_EXPECTED_VALID_DUMP,
+    read_struct, BmpHeader64, Context, DumpHeader64, DumpType, ExceptionRecord64, FullRdmpHeader64,
+    KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange,
+    PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString, DUMP_HEADER64_EXPECTED_SIGNATURE,
+    DUMP_HEADER64_EXPECTED_VALID_DUMP,
 };
 use crate::{Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
@@ -134,14 +135,14 @@ fn virt_translate(
     let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
     let pml4e = Pxe::from(phys_read8(reader, physmem, pml4e_gpa)?);
     if !pml4e.present() {
-        return Err(KdmpParserError::VirtTranslate(gva, NotPresetPxe::Pml4e));
+        return Err(KdmpParserError::VirtTranslate(gva, PxeNotPresent::Pml4e));
     }
 
     let pdpt_base = pml4e.pfn.gpa();
     let pdpte_gpa = Gpa::new(pdpt_base.u64() + (gva.pdpe_idx() * 8));
     let pdpte = Pxe::from(phys_read8(reader, physmem, pdpte_gpa)?);
     if !pdpte.present() {
-        return Err(KdmpParserError::VirtTranslate(gva, NotPresetPxe::Pdpte));
+        return Err(KdmpParserError::VirtTranslate(gva, PxeNotPresent::Pdpte));
     }
 
     // huge pages:
@@ -155,7 +156,7 @@ fn virt_translate(
     let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
     let pde = Pxe::from(phys_read8(reader, physmem, pde_gpa)?);
     if !pde.present() {
-        return Err(KdmpParserError::VirtTranslate(gva, NotPresetPxe::Pde));
+        return Err(KdmpParserError::VirtTranslate(gva, PxeNotPresent::Pde));
     }
 
     // large pages:
@@ -169,7 +170,11 @@ fn virt_translate(
     let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
     let pte = Pxe::from(phys_read8(reader, physmem, pte_gpa)?);
     if !pte.present() {
-        return Err(KdmpParserError::VirtTranslate(gva, NotPresetPxe::Pte));
+        // We'll allow reading from a transition PTE, so return an error only if it's
+        // not one, otherwise we'll carry on.
+        if !pte.transition() {
+            return Err(KdmpParserError::VirtTranslate(gva, PxeNotPresent::Pte));
+        }
     }
 
     let page_base = pte.pfn.gpa();
@@ -242,20 +247,20 @@ fn virt_read_exact(
     }
 }
 
-/// Read a `T` from the cursor.
+/// Read a `T` from virtual memory.
 fn virt_read_struct<T>(
     reader: &mut impl Reader,
     physmem: &PhysmemMap,
     table_base: Gpa,
     gva: Gva,
 ) -> Result<T> {
-    let mut s = mem::MaybeUninit::uninit();
-    let size_of_s = mem::size_of_val(&s);
-    let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr() as *mut u8, size_of_s) };
+    let mut t = mem::MaybeUninit::uninit();
+    let size_of_t = mem::size_of_val(&t);
+    let slice_over_t = unsafe { slice::from_raw_parts_mut(t.as_mut_ptr() as *mut u8, size_of_t) };
 
-    virt_read_exact(reader, physmem, table_base, gva, slice_over_s)?;
+    virt_read_exact(reader, physmem, table_base, gva, slice_over_t)?;
 
-    Ok(unsafe { s.assume_init() })
+    Ok(unsafe { t.assume_init() })
 }
 
 fn virt_read_unicode_string(
@@ -268,7 +273,6 @@ fn virt_read_unicode_string(
         return Err(KdmpParserError::InvalidUnicodeString);
     }
 
-    let n = unicode_str.length / 2;
     let mut buffer = vec![0; unicode_str.length.into()];
     virt_read_exact(
         reader,
@@ -278,10 +282,178 @@ fn virt_read_unicode_string(
         &mut buffer,
     )?;
 
+    let n = unicode_str.length / 2;
+
     Ok(String::from_utf16(unsafe {
         slice::from_raw_parts(buffer.as_ptr().cast(), n.into())
     })?)
 }
+
+fn read_module_map(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    table_base: Gpa,
+    head_addr: Gva,
+) -> Result<ModuleMap> {
+    let mut modules = ModuleMap::new();
+    let entry = virt_read_struct::<ListEntry>(reader, physmem, table_base, head_addr)?;
+    let mut entry_addr = entry.flink.into();
+    // We'll walk it until we hit the starting point (it is circular).
+    while entry_addr != head_addr {
+        // Read the table entry..
+        let data = virt_read_struct::<LdrDataTableEntry>(reader, physmem, table_base, entry_addr)?;
+
+        // ..and read it. I've seen dumps where the `full_dll_name` UNICODE_STRING have
+        // a `buffer` member that points to an invalid virtual address. In
+        // that case, we'll attempt to read the `base_dll_name` as a
+        // recovery mechanism. If this one fails as well, well we got
+        // nothing left.
+        let dll_name =
+            match virt_read_unicode_string(reader, physmem, table_base, &data.full_dll_name) {
+                Ok(o) => Ok(o),
+                e @ Err(KdmpParserError::VirtTranslate(..)) => e,
+                Err(e) => return Err(e),
+            }
+            .or_else(|_| {
+                virt_read_unicode_string(reader, physmem, table_base, &data.base_dll_name)
+            })?;
+
+        // Turn it into a string and shove it into the hash map.
+        let dll_end_addr = data
+            .dll_base
+            .checked_add(data.size_of_image.into())
+            .ok_or_else(|| KdmpParserError::Overflow("module address"))?;
+        let at = data.dll_base.into()..dll_end_addr.into();
+        let inserted = modules.insert(at, dll_name);
+        debug_assert!(inserted.is_none());
+
+        // Go to the next entry.
+        entry_addr = data.in_load_order_links.flink.into();
+    }
+
+    Ok(modules)
+}
+
+fn extract_kernel_modules(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    headers: &DumpHeader64,
+) -> Result<ModuleMap> {
+    let table_base = Gpa::from(headers.directory_table_base);
+    // Read the first LIST_ENTRY - it is a dummy node, so grab the next address off
+    // of it.
+    let head_addr = Gva::from(headers.ps_loaded_module_list);
+    // Walk the `PsLoadedModuleList` to extract the kernel modules.
+    read_module_map(reader, physmem, table_base, head_addr)
+}
+
+// Let's try to find which nt!_KPRCB matches the CONTEXT that we have in the
+// dump. This is the heuristic we use to figure out which processor was
+// executing when the crash-dump was taken.
+fn find_prcb(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    headers: &DumpHeader64,
+    kd_debugger_data_block: &KdDebuggerData64,
+    context: &Context,
+) -> Result<Option<u64>> {
+    let table_base = Gpa::from(headers.directory_table_base);
+    let mut kprcb_ptr_addr = kd_debugger_data_block.ki_processor_block;
+    for _ in 0..headers.number_processors {
+        let kprcb_ptr =
+            virt_read_struct::<u64>(reader, physmem, table_base, kprcb_ptr_addr.into())?;
+
+        let kprcb_context_ptr_addr = kprcb_ptr
+            .checked_add(kd_debugger_data_block.offset_prcb_context.into())
+            .ok_or(KdmpParserError::Overflow("offset_prcb"))?;
+
+        let kprcb_context_ptr =
+            virt_read_struct::<u64>(reader, physmem, table_base, kprcb_context_ptr_addr.into())?;
+
+        let kprcb_context = Box::new(virt_read_struct::<Context>(
+            reader,
+            physmem,
+            table_base,
+            kprcb_context_ptr.into(),
+        )?);
+
+        if kprcb_context.rsp == context.rsp {
+            return Ok(Some(kprcb_ptr));
+        }
+
+        kprcb_ptr_addr = kprcb_ptr_addr
+            .checked_add(8)
+            .ok_or(KdmpParserError::Overflow("kprcb ptr"))?;
+    }
+
+    Ok(None)
+}
+
+fn extract_user_modules(
+    reader: &mut impl Reader,
+    physmem: &PhysmemMap,
+    headers: &DumpHeader64,
+    kd_debugger_data_block: &KdDebuggerData64,
+    prcb_addr: u64,
+) -> Result<Option<ModuleMap>> {
+    let table_base = Gpa::from(headers.directory_table_base);
+
+    // Get the current _KTHREAD.
+    let kthread_addr = prcb_addr
+        .checked_add(kd_debugger_data_block.offset_prcb_current_thread.into())
+        .ok_or(KdmpParserError::Overflow("offset prcb current thread"))?;
+    let kthread_addr = virt_read_struct::<u64>(reader, physmem, table_base, kthread_addr.into())?;
+
+    // Get the current TEB.
+    let teb_addr = kthread_addr
+        .checked_add(kd_debugger_data_block.offset_kthread_teb.into())
+        .ok_or(KdmpParserError::Overflow("offset kthread teb"))?;
+    let teb_addr = virt_read_struct::<u64>(reader, physmem, table_base, teb_addr.into())?;
+    if teb_addr == 0 {
+        return Ok(None);
+    }
+
+    // Get the PEB.
+    // 1: kd> dt _TEB ProcessEnvironmentBlock
+    // win32k!_TEB
+    //    +0x060 ProcessEnvironmentBlock : Ptr64 _PEB
+    let peb_offset = 0x60;
+    let peb_addr = teb_addr
+        .checked_add(peb_offset)
+        .ok_or(KdmpParserError::Overflow("peb offset"))?;
+    let peb_addr = virt_read_struct::<u64>(reader, physmem, table_base, peb_addr.into())?;
+
+    // Get the _PEB_LDR_DATA.
+    // 1: kd> dt nt!_PEB Ldr
+    // +0x018 Ldr              : Ptr64 _PEB_LDR_DATA
+    let ldr_offset = 0x18;
+    let peb_ldr_addr = peb_addr
+        .checked_add(ldr_offset)
+        .ok_or(KdmpParserError::Overflow("ldr offset"))?;
+    let peb_ldr_addr = virt_read_struct::<u64>(reader, physmem, table_base, peb_ldr_addr.into())?;
+
+    // Grab the InLoadOrderModuleList.
+    //     kd> dt nt!_PEB_LDR_DATA InLoadOrderModuleList
+    //    +0x010 InLoadOrderModuleList : _LIST_ENTRY
+
+    let in_load_order_module_list_offset = 0x10;
+    let module_list_entry_addr = peb_ldr_addr
+        .checked_add(in_load_order_module_list_offset)
+        .ok_or(KdmpParserError::Overflow(
+            "in load order module list offset",
+        ))?;
+
+    Ok(Some(read_module_map(
+        reader,
+        physmem,
+        table_base,
+        module_list_entry_addr.into(),
+    )?))
+}
+
+/// A module map. The key is the range of where the module lives at and the
+/// value is a path to the module or it's name if no path is available.
+pub type ModuleMap = HashMap<Range<Gva>, String>;
 
 /// A kernel dump parser that gives access to the physical memory space stored
 /// in the dump. It also offers virtual to physical memory translation as well
@@ -292,14 +464,17 @@ pub struct KernelDumpParser<'reader> {
     /// Context header.
     context: Box<Context>,
     /// The dump headers.
-    headers: Box<Header64>,
+    headers: Box<DumpHeader64>,
     /// This maps a physical address to a file offset. Seeking there gives the
     /// page content.
     physmem: PhysmemMap,
     /// The [`Reader`] object that allows us to seek / read the dump file which
     /// could be memory mapped, read from a file, etc.
     reader: RefCell<Box<dyn Reader + 'reader>>,
-    kernel_modules: HashMap<Range<Gva>, String>,
+    /// The driver modules loaded when the crash-dump was taken. Extracted from
+    /// the nt!PsLoadedModuleList.
+    kernel_modules: ModuleMap,
+    user_modules: ModuleMap,
 }
 
 impl<'reader> Debug for KernelDumpParser<'reader> {
@@ -315,12 +490,12 @@ impl<'reader> KernelDumpParser<'reader> {
     /// parses it.
     pub fn with_reader(mut reader: impl Reader + 'reader) -> Result<Self> {
         // Parse the dump header and check if things look right.
-        let headers = Box::new(read_struct::<Header64>(&mut reader)?);
-        if headers.signature != HEADER64_EXPECTED_SIGNATURE {
+        let headers = Box::new(read_struct::<DumpHeader64>(&mut reader)?);
+        if headers.signature != DUMP_HEADER64_EXPECTED_SIGNATURE {
             return Err(KdmpParserError::InvalidSignature(headers.signature));
         }
 
-        if headers.valid_dump != HEADER64_EXPECTED_VALID_DUMP {
+        if headers.valid_dump != DUMP_HEADER64_EXPECTED_VALID_DUMP {
             return Err(KdmpParserError::InvalidValidDump(headers.valid_dump));
         }
 
@@ -335,55 +510,43 @@ impl<'reader> KernelDumpParser<'reader> {
             headers.context_record_buffer.as_slice(),
         ))?);
 
-        // Walk the `PsLoadedModuleList` to extract the kernel modules.
-        let mut kernel_modules = HashMap::new();
-        let table_base = Gpa::from(headers.directory_table_base);
-        // Read the first LIST_ENTRY - it is a dummy node, so grab the next address off
-        // of it.
-        let head_addr = Gva::from(headers.ps_loaded_module_list);
-        let entry = virt_read_struct::<ListEntry>(&mut reader, &physmem, table_base, head_addr)?;
-        let mut entry_addr = entry.flink.into();
-        // We'll walk it until we hit the starting point (it is circular).
-        while entry_addr != head_addr {
-            // Read the table entry..
-            let data = virt_read_struct::<LdrDataTableEntry>(
+        // Extract the kernel modules.
+        let kernel_modules = extract_kernel_modules(&mut reader, &physmem, &headers)?;
+
+        // Now let's try to find out user-modules.
+        // First, we read the KDDEBUGGER_DATA_BLOCK structure to know where the PCRBs
+        // are.
+        let kd_debugger_data_block = Box::new(virt_read_struct::<KdDebuggerData64>(
+            &mut reader,
+            &physmem,
+            headers.directory_table_base.into(),
+            headers.kd_debugger_data_block.into(),
+        )?);
+
+        let user_modules = if let Some(prcb_addr) = find_prcb(
+            &mut reader,
+            &physmem,
+            &headers,
+            &kd_debugger_data_block,
+            &context,
+        )? {
+            extract_user_modules(
                 &mut reader,
                 &physmem,
-                table_base,
-                entry_addr,
-            )?;
+                &headers,
+                &kd_debugger_data_block,
+                prcb_addr,
+            )
+        } else {
+            Ok(None)
+        };
 
-            // ..and read it. I've seen dumps where the `full_dll_name` UNICODE_STRING have
-            // a `buffer` member that points to an invalid virtual address. In
-            // that case, we'll attempt to read the `base_dll_name` as a
-            // recovery mechanism. If this one fails as well, well we got
-            // nothing left.
-            let dll_name = match virt_read_unicode_string(
-                &mut reader,
-                &physmem,
-                table_base,
-                &data.full_dll_name,
-            ) {
-                Ok(o) => Ok(o),
-                e @ Err(KdmpParserError::VirtTranslate(..)) => e,
-                Err(e) => return Err(e),
-            }
-            .or_else(|_| {
-                virt_read_unicode_string(&mut reader, &physmem, table_base, &data.base_dll_name)
-            })?;
-
-            // Turn it into a string and shove it into the hash map.
-            let dll_end_addr = data
-                .dll_base
-                .checked_add(data.size_of_image.into())
-                .ok_or_else(|| KdmpParserError::Overflow("kernel module address"))?;
-            let at = data.dll_base.into()..dll_end_addr.into();
-            let inserted = kernel_modules.insert(at, dll_name);
-            debug_assert!(inserted.is_none());
-
-            // Go to the next entry.
-            entry_addr = data.in_load_order_links.flink.into();
-        }
+        let user_modules = match user_modules {
+            Ok(o) => o,
+            Err(KdmpParserError::PhysTranslate(..)) => None,
+            Err(KdmpParserError::VirtTranslate(..)) => None,
+            Err(e) => return Err(e),
+        }.unwrap_or_default();
 
         let reader: RefCell<Box<dyn Reader>> = RefCell::new(Box::new(reader));
 
@@ -394,6 +557,7 @@ impl<'reader> KernelDumpParser<'reader> {
             physmem,
             reader,
             kernel_modules,
+            user_modules,
         })
     }
 
@@ -432,13 +596,18 @@ impl<'reader> KernelDumpParser<'reader> {
         self.kernel_modules.iter().map(|(k, v)| (k, v.as_str()))
     }
 
+    /// User modules loaded when the dump was taken.
+    pub fn user_modules(&self) -> impl ExactSizeIterator<Item = (&Range<Gva>, &str)> + '_ {
+        self.user_modules.iter().map(|(k, v)| (k, v.as_str()))
+    }
+
     /// What kind of dump is it?
     pub fn dump_type(&self) -> DumpType {
         self.dump_type
     }
 
     /// Get the dump headers.
-    pub fn headers(&self) -> &Header64 {
+    pub fn headers(&self) -> &DumpHeader64 {
         &self.headers
     }
 
@@ -527,7 +696,7 @@ impl<'reader> KernelDumpParser<'reader> {
     /// and stored one after another. If the first page of the first run is
     /// at file offset 0x2_000, then the first page of the second run is at
     /// file offset 0x2_000+(2*0x1_000).
-    fn full_physmem(headers: &Header64, reader: &mut impl Reader) -> Result<PhysmemMap> {
+    fn full_physmem(headers: &DumpHeader64, reader: &mut impl Reader) -> Result<PhysmemMap> {
         let mut page_offset = reader.stream_position()?;
         let mut run_cursor = io::Cursor::new(headers.physical_memory_block_buffer);
         let physmem_desc = read_struct::<PhysmemDesc>(&mut run_cursor)?;
@@ -690,7 +859,7 @@ impl<'reader> KernelDumpParser<'reader> {
 
     fn build_physmem(
         dump_type: DumpType,
-        headers: &Header64,
+        headers: &DumpHeader64,
         reader: &mut impl Reader,
     ) -> Result<PhysmemMap> {
         use DumpType as D;

@@ -4,12 +4,12 @@ use std::{io, string};
 
 use thiserror::Error;
 
-use crate::structs::{HEADER64_EXPECTED_SIGNATURE, HEADER64_EXPECTED_VALID_DUMP};
+use crate::structs::{DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP};
 use crate::{Gpa, Gva};
 pub type Result<R> = std::result::Result<R, KdmpParserError>;
 
 #[derive(Debug)]
-pub enum NotPresetPxe {
+pub enum PxeNotPresent {
     Pml4e,
     Pdpte,
     Pde,
@@ -32,9 +32,9 @@ pub enum KdmpParserError {
     UnknownDumpType(u32),
     #[error("duplicate gpa found in physmem map for {0}")]
     DuplicateGpa(Gpa),
-    #[error("header's signature looks wrong: {0:#x} vs {HEADER64_EXPECTED_SIGNATURE:#x}")]
+    #[error("header's signature looks wrong: {0:#x} vs {DUMP_HEADER64_EXPECTED_SIGNATURE:#x}")]
     InvalidSignature(u32),
-    #[error("header's valid dump looks wrong: {0:#x} vs {HEADER64_EXPECTED_VALID_DUMP:#x}")]
+    #[error("header's valid dump looks wrong: {0:#x} vs {DUMP_HEADER64_EXPECTED_VALID_DUMP:#x}")]
     InvalidValidDump(u32),
     #[error("overflow for phys addr w/ run {0} page {1}")]
     PhysAddrOverflow(u32, u64),
@@ -46,8 +46,8 @@ pub enum KdmpParserError {
     PartialPhysRead,
     #[error("partial virtual memory read")]
     PartialVirtRead,
-    #[error("phys translation of {0}")]
+    #[error("phys to offset translation of {0}")]
     PhysTranslate(Gpa),
-    #[error("virt to phys translation of {0}: {1:?}")]
-    VirtTranslate(Gva, NotPresetPxe),
+    #[error("virt to phys translation of {0}: {1:?} not present")]
+    VirtTranslate(Gva, PxeNotPresent),
 }

@@ -109,7 +109,7 @@ fn main() -> Result<()> {
     }
 
     if args.modules {
-        for (at, module) in parser.kernel_modules() {
+        for (at, module) in parser.user_modules().chain(parser.kernel_modules()) {
             println!("{:#x}-{:#x}: {module}", at.start.u64(), at.end.u64());
         }
     }
