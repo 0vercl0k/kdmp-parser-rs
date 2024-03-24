@@ -231,7 +231,6 @@ impl TryFrom<&[u8]> for PhysmemDesc {
     }
 }
 
-#[derive(Debug)]
 #[repr(C)]
 pub struct Context {
     pub p1_home: u64,
@@ -295,6 +294,70 @@ pub struct Context {
     pub last_branch_from_rip: u64,
     pub last_exception_to_rip: u64,
     pub last_exception_from_rip: u64,
+}
+
+impl Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Context")
+            .field("p1_home", &self.p1_home)
+            .field("p2_home", &self.p2_home)
+            .field("p3_home", &self.p3_home)
+            .field("p4_home", &self.p4_home)
+            .field("p5_home", &self.p5_home)
+            .field("p6_home", &self.p6_home)
+            .field("context_flags", &self.context_flags)
+            .field("mxcsr", &self.mxcsr)
+            .field("seg_cs", &self.seg_cs)
+            .field("seg_ds", &self.seg_ds)
+            .field("seg_es", &self.seg_es)
+            .field("seg_fs", &self.seg_fs)
+            .field("seg_gs", &self.seg_gs)
+            .field("seg_ss", &self.seg_ss)
+            .field("eflags", &self.eflags)
+            .field("dr0", &self.dr0)
+            .field("dr1", &self.dr1)
+            .field("dr2", &self.dr2)
+            .field("dr3", &self.dr3)
+            .field("dr6", &self.dr6)
+            .field("dr7", &self.dr7)
+            .field("rax", &self.rax)
+            .field("rcx", &self.rcx)
+            .field("rdx", &self.rdx)
+            .field("rbx", &self.rbx)
+            .field("rsp", &self.rsp)
+            .field("rbp", &self.rbp)
+            .field("rsi", &self.rsi)
+            .field("rdi", &self.rdi)
+            .field("r8", &self.r8)
+            .field("r9", &self.r9)
+            .field("r10", &self.r10)
+            .field("r11", &self.r11)
+            .field("r12", &self.r12)
+            .field("r13", &self.r13)
+            .field("r14", &self.r14)
+            .field("r15", &self.r15)
+            .field("rip", &self.rip)
+            .field("control_word", &self.control_word)
+            .field("status_word", &self.status_word)
+            .field("tag_word", &self.tag_word)
+            .field("error_opcode", &self.error_opcode)
+            .field("error_offset", &self.error_offset)
+            .field("error_selector", &self.error_selector)
+            .field("data_offset", &self.data_offset)
+            .field("data_selector", &self.data_selector)
+            .field("mxcsr2", &self.mxcsr2)
+            .field("mxcsr_mask", &self.mxcsr_mask)
+            .field("float_registers", &self.float_registers)
+            .field("xmm_registers", &self.xmm_registers)
+            .field("vector_register", &self.vector_register)
+            .field("vector_control", &self.vector_control)
+            .field("debug_control", &self.debug_control)
+            .field("last_branch_to_rip", &self.last_branch_to_rip)
+            .field("last_branch_from_rip", &self.last_branch_from_rip)
+            .field("last_exception_to_rip", &self.last_exception_to_rip)
+            .field("last_exception_from_rip", &self.last_exception_from_rip)
+            .finish()
+    }
 }
 
 /// Peek for a `T` from the cursor.
