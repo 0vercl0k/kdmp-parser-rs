@@ -21,10 +21,13 @@ enum ReaderMode {
 struct Args {
     /// The dump path.
     dump_path: PathBuf,
-    /// Show the context record.
+    /// Dump the dump headers.
+    #[arg(long, default_value_t = false)]
+    dump_headers: bool,
+    /// Dump the context record.
     #[arg(short, long)]
     context_record: bool,
-    /// Show the exception record.
+    /// Dump the exception record.
     #[arg(short, long)]
     exception_record: bool,
     /// Dump the first `len` bytes of every physical pages, unless an address is
@@ -92,6 +95,10 @@ fn main() -> Result<()> {
         }
     }
     .context("failed to parse the kernel dump")?;
+
+    if args.dump_headers {
+        println!("{:?}", parser.headers());
+    }
 
     if args.context_record {
         println!("{:#x?}", parser.context_record());

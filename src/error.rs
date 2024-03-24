@@ -10,8 +10,10 @@ pub type Result<R> = std::result::Result<R, KdmpParserError>;
 
 #[derive(Error, Debug)]
 pub enum KdmpParserError {
-    #[error("utf8: {0}")]
-    Utf8(#[from] string::FromUtf8Error),
+    #[error("invalid UNICODE_STRING")]
+    InvalidUnicodeString,
+    #[error("utf16: {0}")]
+    Utf16(#[from] string::FromUtf16Error),
     #[error("overflow: {0}")]
     Overflow(&'static str),
     #[error("io: {0}")]

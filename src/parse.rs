@@ -264,6 +264,11 @@ fn virt_read_unicode_string(
     table_base: Gpa,
     unicode_str: &UnicodeString,
 ) -> Result<String> {
+    if (unicode_str.length % 2) != 0 {
+        return Err(KdmpParserError::InvalidUnicodeString);
+    }
+
+    let n = unicode_str.length / 2;
     let mut buffer = vec![0; unicode_str.length.into()];
     virt_read_exact(
         reader,
@@ -273,7 +278,9 @@ fn virt_read_unicode_string(
         &mut buffer,
     )?;
 
-    Ok(String::from_utf8(buffer)?)
+    Ok(String::from_utf16(unsafe {
+        slice::from_raw_parts(buffer.as_ptr().cast(), n.into())
+    })?)
 }
 
 /// A kernel dump parser that gives access to the physical memory space stored
@@ -428,6 +435,11 @@ impl<'reader> KernelDumpParser<'reader> {
     /// What kind of dump is it?
     pub fn dump_type(&self) -> DumpType {
         self.dump_type
+    }
+
+    /// Get the dump headers.
+    pub fn headers(&self) -> &Header64 {
+        &self.headers
     }
 
     /// Get the exception record.
