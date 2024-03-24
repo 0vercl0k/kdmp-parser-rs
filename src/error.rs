@@ -8,6 +8,14 @@ use crate::structs::{HEADER64_EXPECTED_SIGNATURE, HEADER64_EXPECTED_VALID_DUMP};
 use crate::{Gpa, Gva};
 pub type Result<R> = std::result::Result<R, KdmpParserError>;
 
+#[derive(Debug)]
+pub enum NotPresetPxe {
+    Pml4e,
+    Pdpte,
+    Pde,
+    Pte,
+}
+
 #[derive(Error, Debug)]
 pub enum KdmpParserError {
     #[error("invalid UNICODE_STRING")]
@@ -40,6 +48,6 @@ pub enum KdmpParserError {
     PartialVirtRead,
     #[error("phys translation of {0}")]
     PhysTranslate(Gpa),
-    #[error("virt to phys translation of {0}")]
-    VirtTranslate(Gva),
+    #[error("virt to phys translation of {0}: {1:?}")]
+    VirtTranslate(Gva, NotPresetPxe),
 }

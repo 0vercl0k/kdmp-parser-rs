@@ -11,7 +11,7 @@ use std::path::Path;
 use std::{io, mem};
 
 use crate::bits::Bits;
-use crate::error::Result;
+use crate::error::{NotPresetPxe, Result};
 use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
@@ -134,14 +134,14 @@ fn virt_translate(
     let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
     let pml4e = Pxe::from(phys_read8(reader, physmem, pml4e_gpa)?);
     if !pml4e.present() {
-        return Err(KdmpParserError::VirtTranslate(gva));
+        return Err(KdmpParserError::VirtTranslate(gva, NotPresetPxe::Pml4e));
     }
 
     let pdpt_base = pml4e.pfn.gpa();
     let pdpte_gpa = Gpa::new(pdpt_base.u64() + (gva.pdpe_idx() * 8));
     let pdpte = Pxe::from(phys_read8(reader, physmem, pdpte_gpa)?);
     if !pdpte.present() {
-        return Err(KdmpParserError::VirtTranslate(gva));
+        return Err(KdmpParserError::VirtTranslate(gva, NotPresetPxe::Pdpte));
     }
 
     // huge pages:
@@ -155,7 +155,7 @@ fn virt_translate(
     let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
     let pde = Pxe::from(phys_read8(reader, physmem, pde_gpa)?);
     if !pde.present() {
-        return Err(KdmpParserError::VirtTranslate(gva));
+        return Err(KdmpParserError::VirtTranslate(gva, NotPresetPxe::Pde));
     }
 
     // large pages:
@@ -169,7 +169,7 @@ fn virt_translate(
     let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
     let pte = Pxe::from(phys_read8(reader, physmem, pte_gpa)?);
     if !pte.present() {
-        return Err(KdmpParserError::VirtTranslate(gva));
+        return Err(KdmpParserError::VirtTranslate(gva, NotPresetPxe::Pte));
     }
 
     let page_base = pte.pfn.gpa();
@@ -365,7 +365,7 @@ impl<'reader> KernelDumpParser<'reader> {
                 &data.full_dll_name,
             ) {
                 Ok(o) => Ok(o),
-                e @ Err(KdmpParserError::VirtTranslate(_)) => e,
+                e @ Err(KdmpParserError::VirtTranslate(..)) => e,
                 Err(e) => return Err(e),
             }
             .or_else(|_| {
