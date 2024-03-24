@@ -48,7 +48,6 @@ fn compare_kernel_modules(parser: &KernelDumpParser, modules: &[M]) -> bool {
     let mut seen = HashSet::new();
     for (r, name) in parser_modules {
         if seen.contains(&r.start) {
-            println!("{name} 1");
             return false;
         }
 
@@ -62,11 +61,6 @@ fn compare_kernel_modules(parser: &KernelDumpParser, modules: &[M]) -> bool {
                 continue;
             }
 
-            println!(
-                "{:?} {}",
-                p.file_name().unwrap().to_str().unwrap(),
-                found_mod.name
-            );
             return false;
         }
     }
