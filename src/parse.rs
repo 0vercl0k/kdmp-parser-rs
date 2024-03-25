@@ -15,7 +15,7 @@ use crate::error::{PxeNotPresent, Result};
 use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
-    read_struct, BmpHeader64, Context, DumpHeader64, DumpType, ExceptionRecord64, FullRdmpHeader64,
+    read_struct, BmpHeader64, Context, Header64, DumpType, ExceptionRecord64, FullRdmpHeader64,
     KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange,
     PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString, DUMP_HEADER64_EXPECTED_SIGNATURE,
     DUMP_HEADER64_EXPECTED_VALID_DUMP,
@@ -337,7 +337,7 @@ fn read_module_map(
 fn extract_kernel_modules(
     reader: &mut impl Reader,
     physmem: &PhysmemMap,
-    headers: &DumpHeader64,
+    headers: &Header64,
 ) -> Result<ModuleMap> {
     let table_base = Gpa::from(headers.directory_table_base);
     // Read the first LIST_ENTRY - it is a dummy node, so grab the next address off
@@ -353,7 +353,7 @@ fn extract_kernel_modules(
 fn find_prcb(
     reader: &mut impl Reader,
     physmem: &PhysmemMap,
-    headers: &DumpHeader64,
+    headers: &Header64,
     kd_debugger_data_block: &KdDebuggerData64,
     context: &Context,
 ) -> Result<Option<u64>> {
@@ -392,7 +392,7 @@ fn find_prcb(
 fn extract_user_modules(
     reader: &mut impl Reader,
     physmem: &PhysmemMap,
-    headers: &DumpHeader64,
+    headers: &Header64,
     kd_debugger_data_block: &KdDebuggerData64,
     prcb_addr: u64,
 ) -> Result<Option<ModuleMap>> {
@@ -464,7 +464,7 @@ pub struct KernelDumpParser<'reader> {
     /// Context header.
     context: Box<Context>,
     /// The dump headers.
-    headers: Box<DumpHeader64>,
+    headers: Box<Header64>,
     /// This maps a physical address to a file offset. Seeking there gives the
     /// page content.
     physmem: PhysmemMap,
@@ -490,7 +490,7 @@ impl<'reader> KernelDumpParser<'reader> {
     /// parses it.
     pub fn with_reader(mut reader: impl Reader + 'reader) -> Result<Self> {
         // Parse the dump header and check if things look right.
-        let headers = Box::new(read_struct::<DumpHeader64>(&mut reader)?);
+        let headers = Box::new(read_struct::<Header64>(&mut reader)?);
         if headers.signature != DUMP_HEADER64_EXPECTED_SIGNATURE {
             return Err(KdmpParserError::InvalidSignature(headers.signature));
         }
@@ -608,7 +608,7 @@ impl<'reader> KernelDumpParser<'reader> {
     }
 
     /// Get the dump headers.
-    pub fn headers(&self) -> &DumpHeader64 {
+    pub fn headers(&self) -> &Header64 {
         &self.headers
     }
 
@@ -697,7 +697,7 @@ impl<'reader> KernelDumpParser<'reader> {
     /// and stored one after another. If the first page of the first run is
     /// at file offset 0x2_000, then the first page of the second run is at
     /// file offset 0x2_000+(2*0x1_000).
-    fn full_physmem(headers: &DumpHeader64, reader: &mut impl Reader) -> Result<PhysmemMap> {
+    fn full_physmem(headers: &Header64, reader: &mut impl Reader) -> Result<PhysmemMap> {
         let mut page_offset = reader.stream_position()?;
         let mut run_cursor = io::Cursor::new(headers.physical_memory_block_buffer);
         let physmem_desc = read_struct::<PhysmemDesc>(&mut run_cursor)?;
@@ -860,7 +860,7 @@ impl<'reader> KernelDumpParser<'reader> {
 
     fn build_physmem(
         dump_type: DumpType,
-        headers: &DumpHeader64,
+        headers: &Header64,
         reader: &mut impl Reader,
     ) -> Result<PhysmemMap> {
         use DumpType as D;

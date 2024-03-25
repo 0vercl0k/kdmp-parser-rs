@@ -71,7 +71,7 @@ pub const DUMP_HEADER64_EXPECTED_VALID_DUMP: u32 = 0x34_36_55_44; // '46UD'
 /// adjustment added from reversing `nt!IoFillDumpHeader`.
 // https://microsoft.github.io/windows-docs-rs/doc/windows/Win32/System/Diagnostics/Debug/struct.DUMP_HEADER64.html#structfield.DumpType
 #[repr(C)]
-pub struct DumpHeader64 {
+pub struct Header64 {
     pub signature: u32,
     pub valid_dump: u32,
     pub major_version: u32,
@@ -110,9 +110,9 @@ pub struct DumpHeader64 {
     reserved1: [u8; 4008],
 }
 
-impl Debug for DumpHeader64 {
+impl Debug for Header64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DumpHeader64")
+        f.debug_struct("Header64")
             .field("signature", &self.signature)
             .field("valid_dump", &self.valid_dump)
             .field("major_version", &self.major_version)
@@ -662,14 +662,14 @@ pub struct KdDebuggerData64 {
 mod tests {
     use std::mem;
 
-    use crate::structs::{Context, DumpHeader64, PhysmemDesc, PhysmemRun};
+    use crate::structs::{Context, Header64, PhysmemDesc, PhysmemRun};
 
     /// Ensure that the sizes of key structures are right.
     #[test]
     fn layout() {
         assert_eq!(mem::size_of::<PhysmemDesc>(), 0x10);
         assert_eq!(mem::size_of::<PhysmemRun>(), 0x10);
-        assert_eq!(mem::size_of::<DumpHeader64>(), 0x2_000);
+        assert_eq!(mem::size_of::<Header64>(), 0x2_000);
         assert_eq!(mem::size_of::<Context>(), 0x4d0);
     }
 }
