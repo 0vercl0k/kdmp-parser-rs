@@ -22,6 +22,7 @@ struct M {
     end: String,
 }
 
+#[derive(Debug)]
 struct Module {
     name: String,
     at: Range<Gva>,
@@ -61,15 +62,11 @@ struct TestcaseValues<'test> {
     r13: u64,
     r14: u64,
     r15: u64,
-    kernel_modules: &'test [Module],
+    modules: &'test [Module],
 }
 
-fn compare_kernel_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
-    let parser_modules = parser.kernel_modules();
-    if parser_modules.len() != modules.len() {
-        return false;
-    }
-
+fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
+    let parser_modules = parser.user_modules().chain(parser.kernel_modules());
     let mut seen = HashSet::new();
     for (r, name) in parser_modules {
         if seen.contains(&r.start) {
@@ -85,11 +82,12 @@ fn compare_kernel_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool
                 continue;
             }
 
+            println!("{name} {found_mod:?}");
             return false;
         }
     }
 
-    true
+    seen.len() == modules.len()
 }
 
 #[test]
@@ -144,7 +142,7 @@ fn regressions() {
         r13: 0xfffff805_10c3c958,
         r14: 0x00000000_00000000,
         r15: 0x00000000_00000052,
-        kernel_modules: modules_1.as_slice(),
+        modules: modules_1.as_slice(),
     };
 
     let full = TestcaseValues {
@@ -178,7 +176,7 @@ fn regressions() {
         r13: 0xfffff805_10c3c958,
         r14: 0x00000000_00000000,
         r15: 0x00000000_00000052,
-        kernel_modules: &modules_1,
+        modules: &modules_1,
     };
 
     let modules_2: Vec<M> =
@@ -219,8 +217,15 @@ fn regressions() {
         r13: 0x00000000_00000003,
         r14: 0xfffff803_f1e9a180,
         r15: 0x00000000_0000001f,
-        kernel_modules: &modules_2.as_slice(),
+        modules: &modules_2,
     };
+
+    let modules_3: Vec<M> =
+        serde_json::from_reader(File::open(test_dir.join("modules_3.json")).unwrap()).unwrap();
+    let modules_3 = modules_3
+        .into_iter()
+        .map(|m| m.into())
+        .collect::<Vec<Module>>();
 
     let kernel_user_dump = TestcaseValues {
         file: base_path.join("kerneluserdump.dmp"),
@@ -253,7 +258,7 @@ fn regressions() {
         r13: 0x00000000_00000003,
         r14: 0xfffff803_f1e9a180,
         r15: 0x00000000_0000001f,
-        kernel_modules: &modules_2,
+        modules: &modules_3,
     };
 
     let complete_dump = TestcaseValues {
@@ -287,7 +292,7 @@ fn regressions() {
         r13: 0x00000000_00000003,
         r14: 0xfffff803_f1e9a180,
         r15: 0x00000000_0000001f,
-        kernel_modules: &modules_2,
+        modules: &modules_3,
     };
 
     let tests = [&bmp, &full, &kernel_dump, &kernel_user_dump, &complete_dump];
@@ -322,6 +327,6 @@ fn regressions() {
         assert_eq!(ctx.r13, test.r13);
         assert_eq!(ctx.r14, test.r14);
         assert_eq!(ctx.r15, test.r15);
-        assert!(compare_kernel_modules(&parser, test.kernel_modules));
+        assert!(compare_modules(&parser, test.modules));
     }
 }
