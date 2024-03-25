@@ -5,13 +5,7 @@ edition = "2021"
 authors = ["Axel '0vercl0k' Souchet"]
 categories = ["parser-implementations"]
 description = "A KISS Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger."
-include = [
-    "/Cargo.toml",
-    "/LICENSE",
-    "/src/**",
-    "/examples/**",
-    "README.md",
-]
+include = ["/Cargo.toml", "/LICENSE", "/src/**", "/examples/**", "README.md"]
 keywords = ["windows", "kernel", "crashdump"]
 license = "MIT"
 repository = "https://github.com/0vercl0k/kdmp-parser-rs"
@@ -25,6 +19,8 @@ thiserror = "1.0.58"
 [dev-dependencies]
 anyhow = "1.0.80"
 clap = { version = "4.5.1", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [[example]]
 name = "parser"
