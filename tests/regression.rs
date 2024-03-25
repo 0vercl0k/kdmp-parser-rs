@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use kdmp_parser::{Gpa, Gva, KernelDumpParser};
 
+#[derive(Debug)]
 struct M {
     name: &'static str,
     at: Range<Gva>,
@@ -54,8 +55,10 @@ fn compare_kernel_modules(parser: &KernelDumpParser, modules: &[M]) -> bool {
         let found_mod = modules.iter().find(|m| m.at == *r).unwrap();
         seen.insert(r.start);
 
-        let p = PathBuf::from(&name);
-        let filename = p.file_name().unwrap().to_str().unwrap();
+        let Some((_, filename)) = name.rsplit_once('\\') else {
+            return false;
+        };
+
         if filename.to_lowercase() != found_mod.name.to_lowercase() {
             if found_mod.name == "nt" && filename == "ntoskrnl.exe" {
                 continue;

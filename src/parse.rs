@@ -546,7 +546,8 @@ impl<'reader> KernelDumpParser<'reader> {
             Err(KdmpParserError::PhysTranslate(..)) => None,
             Err(KdmpParserError::VirtTranslate(..)) => None,
             Err(e) => return Err(e),
-        }.unwrap_or_default();
+        }
+        .unwrap_or_default();
 
         let reader: RefCell<Box<dyn Reader>> = RefCell::new(Box::new(reader));
 
