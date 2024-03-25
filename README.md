@@ -1,5 +1,5 @@
 <div align='center'>
-  <h1><code>kdmp-parser-rs</code></h1>
+  <h1><code>kdmp-parser</code></h1>
   <p>
     <strong>A <a href="https://en.wikipedia.org/wiki/KISS_principle">KISS</a> Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.</strong>
   </p>
