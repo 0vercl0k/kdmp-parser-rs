@@ -15,12 +15,12 @@ use crate::error::{PxeNotPresent, Result};
 use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
-    read_struct, BmpHeader64, Context, Header64, DumpType, ExceptionRecord64, FullRdmpHeader64,
+    read_struct, BmpHeader64, Context, DumpType, ExceptionRecord64, FullRdmpHeader64, Header64,
     KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange,
     PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString, DUMP_HEADER64_EXPECTED_SIGNATURE,
     DUMP_HEADER64_EXPECTED_VALID_DUMP,
 };
-use crate::{Gpa, Gva, KdmpParserError, Pfn, Pxe};
+use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
 fn gpa_from_bitmap(bitmap_idx: u64, bit_idx: usize) -> Option<Gpa> {
     let pfn = Pfn::new(
@@ -43,7 +43,7 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
 fn phys_translate(physmem: &PhysmemMap, gpa: Gpa) -> Result<u64> {
     let offset = *physmem
         .get(&gpa.page_align())
-        .ok_or_else(|| KdmpParserError::PhysTranslate(gpa))?;
+        .ok_or(AddrTranslationError::Phys(gpa))?;
 
     offset
         .checked_add(gpa.offset())
@@ -135,14 +135,14 @@ fn virt_translate(
     let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
     let pml4e = Pxe::from(phys_read8(reader, physmem, pml4e_gpa)?);
     if !pml4e.present() {
-        return Err(KdmpParserError::VirtTranslate(gva, PxeNotPresent::Pml4e));
+        return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pml4e).into());
     }
 
     let pdpt_base = pml4e.pfn.gpa();
     let pdpte_gpa = Gpa::new(pdpt_base.u64() + (gva.pdpe_idx() * 8));
     let pdpte = Pxe::from(phys_read8(reader, physmem, pdpte_gpa)?);
     if !pdpte.present() {
-        return Err(KdmpParserError::VirtTranslate(gva, PxeNotPresent::Pdpte));
+        return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pdpte).into());
     }
 
     // huge pages:
@@ -156,7 +156,7 @@ fn virt_translate(
     let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
     let pde = Pxe::from(phys_read8(reader, physmem, pde_gpa)?);
     if !pde.present() {
-        return Err(KdmpParserError::VirtTranslate(gva, PxeNotPresent::Pde));
+        return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pde).into());
     }
 
     // large pages:
@@ -173,7 +173,7 @@ fn virt_translate(
         // We'll allow reading from a transition PTE, so return an error only if it's
         // not one, otherwise we'll carry on.
         if !pte.transition() {
-            return Err(KdmpParserError::VirtTranslate(gva, PxeNotPresent::Pte));
+            return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pte).into());
         }
     }
 
@@ -311,7 +311,7 @@ fn read_module_map(
         let dll_name =
             match virt_read_unicode_string(reader, physmem, table_base, &data.full_dll_name) {
                 Ok(o) => Ok(o),
-                e @ Err(KdmpParserError::VirtTranslate(..)) => e,
+                e @ Err(KdmpParserError::AddrTranslation(..)) => e,
                 Err(e) => return Err(e),
             }
             .or_else(|_| {
@@ -506,7 +506,7 @@ impl<'reader> KernelDumpParser<'reader> {
         let physmem = Self::build_physmem(dump_type, &headers, &mut reader)?;
 
         // Read the context record.
-        let context = Box::new(read_struct::<Context>(&mut io::Cursor::new(
+        let context = Box::new(read_struct(&mut io::Cursor::new(
             headers.context_record_buffer.as_slice(),
         ))?);
 
@@ -543,8 +543,7 @@ impl<'reader> KernelDumpParser<'reader> {
 
         let user_modules = match user_modules {
             Ok(o) => o,
-            Err(KdmpParserError::PhysTranslate(..)) => None,
-            Err(KdmpParserError::VirtTranslate(..)) => None,
+            Err(KdmpParserError::AddrTranslation(..)) => None,
             Err(e) => return Err(e),
         }
         .unwrap_or_default();

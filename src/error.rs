@@ -1,5 +1,6 @@
 // Axel '0vercl0k' Souchet - March 19 2024
 //! This is the error type used across the codebase.
+use std::fmt::Display;
 use std::{io, string};
 
 use thiserror::Error;
@@ -14,6 +15,25 @@ pub enum PxeNotPresent {
     Pdpte,
     Pde,
     Pte,
+}
+
+#[derive(Debug, Error)]
+pub enum AddrTranslationError {
+    Virt(Gva, PxeNotPresent),
+    Phys(Gpa),
+}
+
+impl Display for AddrTranslationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddrTranslationError::Virt(gva, not_pres) => f.write_fmt(format_args!(
+                "virt to phys translation of {gva}: {not_pres:?}"
+            )),
+            AddrTranslationError::Phys(gpa) => {
+                f.write_fmt(format_args!("phys to offset translation of {gpa}"))
+            }
+        }
+    }
 }
 
 #[derive(Error, Debug)]
@@ -46,8 +66,6 @@ pub enum KdmpParserError {
     PartialPhysRead,
     #[error("partial virtual memory read")]
     PartialVirtRead,
-    #[error("phys to offset translation of {0}")]
-    PhysTranslate(Gpa),
-    #[error("virt to phys translation of {0}: {1:?} not present")]
-    VirtTranslate(Gva, PxeNotPresent),
+    #[error("memory translation: {0}")]
+    AddrTranslation(#[from] AddrTranslationError),
 }
