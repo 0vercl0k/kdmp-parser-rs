@@ -561,7 +561,9 @@ impl<'reader> KernelDumpParser<'reader> {
     }
 
     /// Try to read a `T` from virtual memory. If a memory translation error
-    /// occurs, it'll return `None` instead of an error.
+    /// occurs, it'll return `None` instead of an error. This makes it
+    /// particularly useful to write code that tries to be robust against
+    /// corrupted / dumps that are missing virtual or physical memory pages.
     pub fn try_virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
         match self.virt_read_struct::<T>(gva) {
             Ok(o) => Ok(Some(o)),
@@ -591,6 +593,7 @@ impl<'reader> KernelDumpParser<'reader> {
         Ok(self.reader.borrow_mut().read(buf)?)
     }
 
+    /// Try to read a `UNICODE_STRING`.
     fn try_virt_read_unicode_string(&self, unicode_str: &UnicodeString) -> Result<Option<String>> {
         if (unicode_str.length % 2) != 0 {
             return Err(KdmpParserError::InvalidUnicodeString);
@@ -599,7 +602,7 @@ impl<'reader> KernelDumpParser<'reader> {
         let mut buffer = vec![0; unicode_str.length.into()];
         match self.virt_read_exact(unicode_str.buffer.into(), &mut buffer) {
             Ok(_) => {}
-            // If we encountered a memory reading error, we won't consider this as a failure.
+            // If we encountered a memory translation error, we don't consider this a failure.
             Err(KdmpParserError::AddrTranslation(_)) => return Ok(None),
             Err(e) => return Err(e),
         };
