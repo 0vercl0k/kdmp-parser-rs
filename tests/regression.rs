@@ -66,10 +66,12 @@ struct TestcaseValues<'test> {
 }
 
 fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
+    eprintln!("{parser:?}");
     let parser_modules = parser.user_modules().chain(parser.kernel_modules());
     let mut seen = HashSet::new();
     for (r, name) in parser_modules {
         if seen.contains(&r.start) {
+            eprintln!("already seen {}", r.start);
             return false;
         }
 
@@ -82,7 +84,7 @@ fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
                 continue;
             }
 
-            println!("{name} {found_mod:?}");
+            eprintln!("{name} {found_mod:?}");
             return false;
         }
     }

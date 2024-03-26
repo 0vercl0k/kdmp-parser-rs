@@ -38,28 +38,39 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
 }
 
-fn read_module_map(parser: &mut KernelDumpParser, head_addr: Gva) -> Result<ModuleMap> {
+/// Walk a LIST_ENTRY of LdrDataTableEntry. It is used to dump both the user &
+/// driver / module lists.
+fn try_read_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result<Option<ModuleMap>> {
     let mut modules = ModuleMap::new();
-    let entry = parser.virt_read_struct::<ListEntry>(head_addr)?;
+    let Some(entry) = parser.try_virt_read_struct::<ListEntry>(head)? else {
+        return Ok(None);
+    };
+
     let mut entry_addr = entry.flink.into();
     // We'll walk it until we hit the starting point (it is circular).
-    while entry_addr != head_addr {
+    while entry_addr != head {
         // Read the table entry..
-        let data = parser.virt_read_struct::<LdrDataTableEntry>(entry_addr)?;
+        let Some(data) = parser.try_virt_read_struct::<LdrDataTableEntry>(entry_addr)? else {
+            return Ok(None);
+        };
 
-        // ..and read it. I've seen dumps where the `full_dll_name` UNICODE_STRING have
-        // a `buffer` member that points to an invalid virtual address. In
-        // that case, we'll attempt to read the `base_dll_name` as a
-        // recovery mechanism. If this one fails as well, well we got
-        // nothing left.
-        let dll_name = match parser.virt_read_unicode_string(&data.full_dll_name) {
-            Ok(o) => Ok(o),
-            e @ Err(KdmpParserError::AddrTranslation(..)) => e,
-            Err(e) => return Err(e),
-        }
-        .or_else(|_| parser.virt_read_unicode_string(&data.base_dll_name))?;
+        // ..and read it. We first try to read `full_dll_name` but will try
+        // `base_dll_name` is we couldn't read the former.
+        let Some(dll_name) = parser
+            .try_virt_read_unicode_string(&data.full_dll_name)
+            .and_then(|s| {
+                if s.is_none() {
+                    // If we failed to read the `full_dll_name`, give `base_dll_name` a shot.
+                    parser.try_virt_read_unicode_string(&data.base_dll_name)
+                } else {
+                    Ok(s)
+                }
+            })?
+        else {
+            return Ok(None);
+        };
 
-        // Turn it into a string and shove it into the hash map.
+        // Shove it into the map.
         let dll_end_addr = data
             .dll_base
             .checked_add(data.size_of_image.into())
@@ -72,91 +83,124 @@ fn read_module_map(parser: &mut KernelDumpParser, head_addr: Gva) -> Result<Modu
         entry_addr = data.in_load_order_links.flink.into();
     }
 
-    Ok(modules)
+    Ok(Some(modules))
 }
 
-fn extract_kernel_modules(parser: &mut KernelDumpParser) -> Result<ModuleMap> {
-    // Read the first LIST_ENTRY - it is a dummy node, so grab the next address off
-    // of it.
-    let head_addr = Gva::from(parser.headers().ps_loaded_module_list);
-    // Walk the `PsLoadedModuleList` to extract the kernel modules.
-    read_module_map(parser, head_addr)
+/// Extract the drivers / modules out of the `PsLoadedModuleList`.
+fn try_extract_kernel_modules(parser: &mut KernelDumpParser) -> Result<Option<ModuleMap>> {
+    // Walk the LIST_ENTRY!
+    try_read_module_map(parser, parser.headers().ps_loaded_module_list.into())
 }
 
-// Let's try to find which nt!_KPRCB matches the CONTEXT that we have in the
-// dump. This is the heuristic we use to figure out which processor was
-// executing when the crash-dump was taken.
-fn find_prcb(
+/// Try to find the right `nt!_KPRCB` by walking them and finding one that has
+/// the same `Rsp` than in the dump headers' context.
+fn try_find_prcb(
     parser: &mut KernelDumpParser,
     kd_debugger_data_block: &KdDebuggerData64,
-) -> Result<Option<u64>> {
-    let mut kprcb_ptr_addr = kd_debugger_data_block.ki_processor_block;
+) -> Result<Option<Gva>> {
+    let mut processor_block = kd_debugger_data_block.ki_processor_block;
     for _ in 0..parser.headers().number_processors {
-        let kprcb_ptr = parser.virt_read_struct::<u64>(kprcb_ptr_addr.into())?;
+        // Read the KPRCB pointer.
+        let Some(kprcb_addr) = parser.try_virt_read_struct::<u64>(processor_block.into())? else {
+            return Ok(None);
+        };
 
-        let kprcb_context_ptr_addr = kprcb_ptr
+        // Calculate the address of where the CONTEXT pointer is at..
+        let kprcb_context_addr = kprcb_addr
             .checked_add(kd_debugger_data_block.offset_prcb_context.into())
-            .ok_or(KdmpParserError::Overflow("offset_prcb"))?;
+            .ok_or_else(|| KdmpParserError::Overflow("offset_prcb"))?;
 
-        let kprcb_context_ptr = parser.virt_read_struct::<u64>(kprcb_context_ptr_addr.into())?;
+        // ..and read it.
+        let Some(kprcb_context_addr) =
+            parser.try_virt_read_struct::<u64>(kprcb_context_addr.into())?
+        else {
+            return Ok(None);
+        };
 
-        let kprcb_context = Box::new(parser.virt_read_struct::<Context>(kprcb_context_ptr.into())?);
+        // Read the context..
+        let Some(kprcb_context) =
+            parser.try_virt_read_struct::<Context>(kprcb_context_addr.into())?
+        else {
+            return Ok(None);
+        };
 
+        // ..and compare it to ours.
+        let kprcb_context = Box::new(kprcb_context);
         if kprcb_context.rsp == parser.context_record().rsp {
-            return Ok(Some(kprcb_ptr));
+            // The register match so we'll assume the current KPRCB is the one describing
+            // the 'foreground' processor in the crash-dump.
+            return Ok(Some(kprcb_addr.into()));
         }
 
-        kprcb_ptr_addr = kprcb_ptr_addr
-            .checked_add(8)
-            .ok_or(KdmpParserError::Overflow("kprcb ptr"))?;
+        // Otherwise, let's move on to the next pointer.
+        processor_block = processor_block
+            .checked_add(mem::size_of::<u64>() as _)
+            .ok_or_else(|| KdmpParserError::Overflow("kprcb ptr"))?;
     }
 
     Ok(None)
 }
 
-fn extract_user_modules(
+/// Extract the user modules list by grabbing the current thread from the KPRCB.
+/// Then, walk the `PEB.Ldr.InLoadOrderModuleList`.
+fn try_extract_user_modules(
     parser: &mut KernelDumpParser,
     kd_debugger_data_block: &KdDebuggerData64,
-    prcb_addr: u64,
+    prcb_addr: Gva,
 ) -> Result<Option<ModuleMap>> {
-    // Get the current _KTHREAD.
+    // Get the current _KTHREAD..
     let kthread_addr = prcb_addr
+        .u64()
         .checked_add(kd_debugger_data_block.offset_prcb_current_thread.into())
         .ok_or(KdmpParserError::Overflow("offset prcb current thread"))?;
-    let kthread_addr = parser.virt_read_struct::<u64>(kthread_addr.into())?;
+    let Some(kthread_addr) = parser.try_virt_read_struct::<u64>(kthread_addr.into())? else {
+        return Ok(None);
+    };
 
-    // Get the current TEB.
+    // ..then its TEB..
     let teb_addr = kthread_addr
         .checked_add(kd_debugger_data_block.offset_kthread_teb.into())
         .ok_or(KdmpParserError::Overflow("offset kthread teb"))?;
-    let teb_addr = parser.virt_read_struct::<u64>(teb_addr.into())?;
+    let Some(teb_addr) = parser.try_virt_read_struct::<u64>(teb_addr.into())? else {
+        return Ok(None);
+    };
+
     if teb_addr == 0 {
         return Ok(None);
     }
 
-    // Get the PEB.
-    // 1: kd> dt _TEB ProcessEnvironmentBlock
-    // win32k!_TEB
+    // ..then its PEB..
+    // ```
+    // kd> dt nt!_TEB ProcessEnvironmentBlock
+    // nt!_TEB
     //    +0x060 ProcessEnvironmentBlock : Ptr64 _PEB
+    // ```
     let peb_offset = 0x60;
     let peb_addr = teb_addr
         .checked_add(peb_offset)
         .ok_or(KdmpParserError::Overflow("peb offset"))?;
-    let peb_addr = parser.virt_read_struct::<u64>(peb_addr.into())?;
+    let Some(peb_addr) = parser.try_virt_read_struct::<u64>(peb_addr.into())? else {
+        return Ok(None);
+    };
 
-    // Get the _PEB_LDR_DATA.
-    // 1: kd> dt nt!_PEB Ldr
+    // ..then its _PEB_LDR_DATA..
+    // ```
+    // kd> dt nt!_PEB Ldr
     // +0x018 Ldr              : Ptr64 _PEB_LDR_DATA
+    // ```
     let ldr_offset = 0x18;
     let peb_ldr_addr = peb_addr
         .checked_add(ldr_offset)
         .ok_or(KdmpParserError::Overflow("ldr offset"))?;
-    let peb_ldr_addr = parser.virt_read_struct::<u64>(peb_ldr_addr.into())?;
+    let Some(peb_ldr_addr) = parser.try_virt_read_struct::<u64>(peb_ldr_addr.into())? else {
+        return Ok(None);
+    };
 
-    // Grab the InLoadOrderModuleList.
-    //     kd> dt nt!_PEB_LDR_DATA InLoadOrderModuleList
-    //    +0x010 InLoadOrderModuleList : _LIST_ENTRY
-
+    // ..and finally the `InLoadOrderModuleList`.
+    // ```
+    // kd> dt nt!_PEB_LDR_DATA InLoadOrderModuleList
+    // +0x010 InLoadOrderModuleList : _LIST_ENTRY
+    // ````
     let in_load_order_module_list_offset = 0x10;
     let module_list_entry_addr = peb_ldr_addr
         .checked_add(in_load_order_module_list_offset)
@@ -164,10 +208,8 @@ fn extract_user_modules(
             "in load order module list offset",
         ))?;
 
-    Ok(Some(read_module_map(
-        parser,
-        module_list_entry_addr.into(),
-    )?))
+    // From there, we walk the list!
+    try_read_module_map(parser, module_list_entry_addr.into())
 }
 
 /// A module map. The key is the range of where the module lives at and the
@@ -242,42 +284,35 @@ impl<'reader> KernelDumpParser<'reader> {
 
         // Extract the kernel modules if we can. If it fails because of a memory
         // translation error we'll keep going, otherwise we'll error out.
-        match extract_kernel_modules(&mut parser) {
-            Ok(o) => parser.kernel_modules.extend(o),
-            Err(KdmpParserError::AddrTranslation(..)) => {}
-            Err(e) => return Err(e),
-        };
+        if let Some(kernel_modules) = try_extract_kernel_modules(&mut parser)? {
+            parser.kernel_modules.extend(kernel_modules);
+        }
 
         // Now let's try to find out user-modules. For that we need the
         // KDDEBUGGER_DATA_BLOCK structure to know where a bunch of things are.
         // If we can't read the block, we'll have to stop the adventure here as we won't
         // be able to read the things we need to keep going.
-        let kd_debugger_data_block = Box::new(
-            match parser.virt_read_struct::<KdDebuggerData64>(
-                parser.headers().kd_debugger_data_block.into(),
-            ) {
-                Ok(o) => o,
-                Err(KdmpParserError::AddrTranslation(..)) => return Ok(parser),
-                Err(e) => return Err(e),
-            },
-        );
+        let Some(kd_debugger_data_block) = parser.try_virt_read_struct::<KdDebuggerData64>(
+            parser.headers().kd_debugger_data_block.into(),
+        )?
+        else {
+            return Ok(parser);
+        };
+        let kd_debugger_data_block = Box::new(kd_debugger_data_block);
 
-        // We need to figure out which PRCB is the one that crashed. Again, if we
-        // couldn't read memory, we'll just stop there.
-        let prcb_addr = match find_prcb(&mut parser, &kd_debugger_data_block) {
-            Ok(Some(o)) => o,
-            Ok(None) => return Ok(parser),
-            Err(KdmpParserError::AddrTranslation(..)) => return Ok(parser),
-            Err(e) => return Err(e),
+        // We need to figure out which PRCB is the one that crashed.
+        let Some(prcb_addr) = try_find_prcb(&mut parser, &kd_debugger_data_block)? else {
+            return Ok(parser);
         };
 
         // Finally, we're ready to extract the user modules!
-        match extract_user_modules(&mut parser, &kd_debugger_data_block, prcb_addr) {
-            Ok(Some(o)) => parser.user_modules.extend(o),
-            Ok(None) => return Ok(parser),
-            Err(KdmpParserError::AddrTranslation(..)) => return Ok(parser),
-            Err(e) => return Err(e),
+        let Some(user_modules) =
+            try_extract_user_modules(&mut parser, &kd_debugger_data_block, prcb_addr)?
+        else {
+            return Ok(parser);
         };
+
+        parser.user_modules.extend(user_modules);
 
         Ok(parser)
     }
@@ -525,6 +560,17 @@ impl<'reader> KernelDumpParser<'reader> {
         }
     }
 
+    /// Try to read a `T` from virtual memory. If a memory translation error
+    /// occurs, it'll return `None` instead of an error.
+    pub fn try_virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
+        match self.virt_read_struct::<T>(gva) {
+            Ok(o) => Ok(Some(o)),
+            // If we encountered a memory reading error, we won't consider this as a failure.
+            Err(KdmpParserError::AddrTranslation(..)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Read a `T` from virtual memory.
     pub fn virt_read_struct<T>(&self, gva: Gva) -> Result<T> {
         let mut t = mem::MaybeUninit::uninit();
@@ -545,19 +591,24 @@ impl<'reader> KernelDumpParser<'reader> {
         Ok(self.reader.borrow_mut().read(buf)?)
     }
 
-    fn virt_read_unicode_string(&self, unicode_str: &UnicodeString) -> Result<String> {
+    fn try_virt_read_unicode_string(&self, unicode_str: &UnicodeString) -> Result<Option<String>> {
         if (unicode_str.length % 2) != 0 {
             return Err(KdmpParserError::InvalidUnicodeString);
         }
 
         let mut buffer = vec![0; unicode_str.length.into()];
-        self.virt_read_exact(unicode_str.buffer.into(), &mut buffer)?;
+        match self.virt_read_exact(unicode_str.buffer.into(), &mut buffer) {
+            Ok(_) => {}
+            // If we encountered a memory reading error, we won't consider this as a failure.
+            Err(KdmpParserError::AddrTranslation(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
 
         let n = unicode_str.length / 2;
 
-        Ok(String::from_utf16(unsafe {
+        Ok(Some(String::from_utf16(unsafe {
             slice::from_raw_parts(buffer.as_ptr().cast(), n.into())
-        })?)
+        })?))
     }
 
     /// Build the physical memory map for a [`DumpType::Full`] dump.
