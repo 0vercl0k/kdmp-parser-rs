@@ -13,8 +13,8 @@ rust-version = "1.70"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-bitflags = "2.4.2"
-thiserror = "1.0.58"
+bitflags = "2.5.0"
+thiserror = "1.0"
 
 [dev-dependencies]
 anyhow = "1.0.80"
