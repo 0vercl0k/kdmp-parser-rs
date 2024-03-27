@@ -342,7 +342,7 @@ fn regressions() {
     // contains 0A0000000ECC0867  contains 0A00000013341867  contains 0A000000077AF867  contains 00000000166B7880
     // pfn ecc0      ---DA--UWEV  pfn 13341     ---DA--UWEV  pfn 77af      ---DA--UWEV  not valid
     //                                                                               Transition: 166b7
-    //Protect: 4 - ReadWrite
+    // Protect: 4 - ReadWrite
     // ```
     let parser = KernelDumpParser::new(&kernel_user_dump.file).unwrap();
     let mut buffer = [0; 16];
@@ -352,7 +352,8 @@ fn regressions() {
     ];
     assert!(parser.virt_read(0x1a42ea30240.into(), &mut buffer).is_ok());
     assert_eq!(buffer, expected_buffer);
-    // Example of a valid PTE that don't have a physical page backing it (in kerneldump.dmp):
+    // Example of a valid PTE that don't have a physical page backing it (in
+    // kerneldump.dmp):
     // ```
     // kd> !pte 0x1a42ea30240
     //     VA 000001a42ea30240
