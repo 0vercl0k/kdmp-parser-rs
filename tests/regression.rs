@@ -5,7 +5,7 @@ use std::fs::File;
 use std::ops::Range;
 use std::path::PathBuf;
 
-use kdmp_parser::{Gpa, Gva, KernelDumpParser};
+use kdmp_parser::{AddrTranslationError, Gpa, Gva, KdmpParserError, KernelDumpParser};
 use serde::Deserialize;
 
 /// Convert an hexadecimal encoded integer string into a `u64`.
@@ -331,4 +331,60 @@ fn regressions() {
         assert_eq!(ctx.r15, test.r15);
         assert!(compare_modules(&parser, test.modules));
     }
+
+    // Example of a transition PTE readable by WinDbg (in kerneluserdump.dmp):
+    // ```
+    // kd> db 0x1a42ea30240 l10
+    // 000001a4`2ea30240  e0 07 a3 2e a4 01 00 00-80 f2 a2 2e a4 01 00 00  ................
+    // kd> !pte 0x1a42ea30240
+    //                                            VA 000001a42ea30240
+    // PXE at FFFFECF67B3D9018    PPE at FFFFECF67B203480    PDE at FFFFECF640690BA8    PTE at FFFFEC80D2175180
+    // contains 0A0000000ECC0867  contains 0A00000013341867  contains 0A000000077AF867  contains 00000000166B7880
+    // pfn ecc0      ---DA--UWEV  pfn 13341     ---DA--UWEV  pfn 77af      ---DA--UWEV  not valid
+    //                                                                               Transition: 166b7
+    //Protect: 4 - ReadWrite
+    // ```
+    let parser = KernelDumpParser::new(&kernel_user_dump.file).unwrap();
+    let mut buffer = [0; 16];
+    let expected_buffer = [
+        0xe0, 0x07, 0xa3, 0x2e, 0xa4, 0x01, 0x00, 0x00, 0x80, 0xf2, 0xa2, 0x2e, 0xa4, 0x01, 0x00,
+        0x00,
+    ];
+    assert!(parser.virt_read(0x1a42ea30240.into(), &mut buffer).is_ok());
+    assert_eq!(buffer, expected_buffer);
+    // Example of a valid PTE that don't have a physical page backing it (in kerneldump.dmp):
+    // ```
+    // kd> !pte 0x1a42ea30240
+    //     VA 000001a42ea30240
+    // PXE at FFFFECF67B3D9018    PPE at FFFFECF67B203480    PDE at FFFFECF640690BA8    PTE at FFFFEC80D2175180
+    // contains 0A0000000ECC0867  contains 0A00000013341867  contains 0A000000077AF867  contains 00000000166B7880
+    // pfn ecc0      ---DA--UWEV  pfn 13341     ---DA--UWEV  pfn 77af      ---DA--UWEV  not valid
+    //                                            Transition: 166b7
+    //                                            Protect: 4 - ReadWrite
+    // kd> !db 166b7240
+    // Physical memory read at 166b7240 failed
+    //
+    // kd> !pte 0x16e23fa060
+    //     VA 00000016e23fa060
+    // PXE at FFFFECF67B3D9000    PPE at FFFFECF67B2002D8    PDE at FFFFECF64005B888    PTE at FFFFEC800B711FD0
+    // contains 0A00000001FEB867  contains 0A00000019A08867  contains 0A00000019A07867  contains 8000000001BC4867
+    // pfn 1feb      ---DA--UWEV  pfn 19a08     ---DA--UWEV  pfn 19a07     ---DA--UWEV  pfn 1bc4      ---DA--UW-V
+    // kd> !db 1bc4000
+    // Physical memory read at 1bc4000 failed
+    // ```
+    let parser = KernelDumpParser::new(&kernel_dump.file).unwrap();
+    let mut buffer = [0];
+    assert!(matches!(
+        parser.virt_read(0x1a42ea30240.into(), &mut buffer),
+        Err(KdmpParserError::AddrTranslation(
+            AddrTranslationError::Phys(gpa)
+        )) if gpa == 0x166b7240.into()
+    ));
+
+    assert!(matches!(
+        parser.virt_read(0x16e23fa060.into(), &mut buffer),
+        Err(KdmpParserError::AddrTranslation(
+            AddrTranslationError::Phys(gpa)
+        )) if gpa == 0x1bc4060.into()
+    ));
 }
