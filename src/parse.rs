@@ -212,6 +212,19 @@ fn try_extract_user_modules(
     try_read_module_map(parser, module_list_entry_addr.into())
 }
 
+/// Filter out [`AddrTranslationError`] errors and turn them into `None`. This
+/// makes it easier for caller code to write logic that can recover from a
+/// memory read failure by bailing out for example, and not bubbling up an
+/// error.
+fn filter_addr_translation_err<T>(res: Result<T>) -> Result<Option<T>> {
+    match res {
+        Ok(o) => Ok(Some(o)),
+        // If we encountered a memory reading error, we won't consider this as a failure.
+        Err(KdmpParserError::AddrTranslation(..)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// A module map. The key is the range of where the module lives at and the
 /// value is a path to the module or it's name if no path is available.
 pub type ModuleMap = HashMap<Range<Gva>, String>;
@@ -235,6 +248,8 @@ pub struct KernelDumpParser {
     /// The driver modules loaded when the crash-dump was taken. Extracted from
     /// the nt!PsLoadedModuleList.
     kernel_modules: ModuleMap,
+    /// The user modules / DLLs loaded when the crash-dump was taken. Extract
+    /// from the current PEB.Ldr.InLoadOrderModuleList.
     user_modules: ModuleMap,
 }
 
@@ -446,11 +461,16 @@ impl KernelDumpParser {
         }
     }
 
-    pub fn phys_read8(&self, gpa: Gpa) -> Result<u64> {
-        let mut buffer = [0; mem::size_of::<u64>()];
-        self.phys_read_exact(gpa, &mut buffer)?;
+    /// Read a `T` from physical memory.
+    pub fn phys_read_struct<T>(&self, gpa: Gpa) -> Result<T> {
+        let mut t = mem::MaybeUninit::uninit();
+        let size_of_t = mem::size_of_val(&t);
+        let slice_over_t =
+            unsafe { slice::from_raw_parts_mut(t.as_mut_ptr() as *mut u8, size_of_t) };
 
-        Ok(u64::from_le_bytes(buffer))
+        self.phys_read_exact(gpa, slice_over_t)?;
+
+        Ok(unsafe { t.assume_init() })
     }
 
     /// Translate a [`Gva`] into a [`Gpa`].
@@ -458,14 +478,14 @@ impl KernelDumpParser {
         // Aligning in case PCID bits are set (bits 11:0)
         let pml4_base = Gpa::from(self.headers.directory_table_base).page_align();
         let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
-        let pml4e = Pxe::from(self.phys_read8(pml4e_gpa)?);
+        let pml4e = Pxe::from(self.phys_read_struct::<u64>(pml4e_gpa)?);
         if !pml4e.present() {
             return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pml4e).into());
         }
 
         let pdpt_base = pml4e.pfn.gpa();
         let pdpte_gpa = Gpa::new(pdpt_base.u64() + (gva.pdpe_idx() * 8));
-        let pdpte = Pxe::from(self.phys_read8(pdpte_gpa)?);
+        let pdpte = Pxe::from(self.phys_read_struct::<u64>(pdpte_gpa)?);
         if !pdpte.present() {
             return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pdpte).into());
         }
@@ -479,7 +499,7 @@ impl KernelDumpParser {
         }
 
         let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
-        let pde = Pxe::from(self.phys_read8(pde_gpa)?);
+        let pde = Pxe::from(self.phys_read_struct::<u64>(pde_gpa)?);
         if !pde.present() {
             return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pde).into());
         }
@@ -493,7 +513,7 @@ impl KernelDumpParser {
         }
 
         let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
-        let pte = Pxe::from(self.phys_read8(pte_gpa)?);
+        let pte = Pxe::from(self.phys_read_struct::<u64>(pte_gpa)?);
         if !pte.present() {
             // We'll allow reading from a transition PTE, so return an error only if it's
             // not one, otherwise we'll carry on.
@@ -545,17 +565,14 @@ impl KernelDumpParser {
         Ok(total_read)
     }
 
-    /// Try to read virtual memory starting at `gva` into a `buffer`.
+    /// Try to read virtual memory starting at `gva` into a `buffer`.  If a
+    /// memory translation error occurs, it'll return `None` instead of an
+    /// error.
     pub fn try_virt_read(&self, gva: Gva, buffer: &mut [u8]) -> Result<Option<usize>> {
-        match self.virt_read(gva, buffer) {
-            Ok(o) => Ok(Some(o)),
-            // If we encountered a memory reading error, we won't consider this as a failure.
-            Err(KdmpParserError::AddrTranslation(..)) => Ok(None),
-            Err(e) => Err(e),
-        }
+        filter_addr_translation_err(self.virt_read(gva, buffer))
     }
 
-    /// Read virtual memory starting at `gva`
+    /// Read an exact amount of virtual memory starting at `gva`.
     pub fn virt_read_exact(&self, gva: Gva, buffer: &mut [u8]) -> Result<()> {
         // Read virtual memory.
         let len = self.virt_read(gva, buffer)?;
@@ -570,17 +587,11 @@ impl KernelDumpParser {
         }
     }
 
-    /// Try to read a `T` from virtual memory. If a memory translation error
-    /// occurs, it'll return `None` instead of an error. This makes it
-    /// particularly useful to write code that tries to be robust against
-    /// corrupted / dumps that are missing virtual or physical memory pages.
-    pub fn try_virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
-        match self.virt_read_struct::<T>(gva) {
-            Ok(o) => Ok(Some(o)),
-            // If we encountered a memory reading error, we won't consider this as a failure.
-            Err(KdmpParserError::AddrTranslation(..)) => Ok(None),
-            Err(e) => Err(e),
-        }
+    /// Try to read an exact amount of virtual memory starting at `gva`. If a
+    /// memory translation error occurs, it'll return `None` instead of an
+    /// error.
+    pub fn try_virt_read_exact(&self, gva: Gva, buffer: &mut [u8]) -> Result<Option<()>> {
+        filter_addr_translation_err(self.virt_read_exact(gva, buffer))
     }
 
     /// Read a `T` from virtual memory.
@@ -593,6 +604,12 @@ impl KernelDumpParser {
         self.virt_read_exact(gva, slice_over_t)?;
 
         Ok(unsafe { t.assume_init() })
+    }
+
+    /// Try to read a `T` from virtual memory. If a memory translation error
+    /// occurs, it'll return `None` instead of an error.
+    pub fn try_virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
+        filter_addr_translation_err(self.virt_read_struct::<T>(gva))
     }
 
     fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
