@@ -219,7 +219,7 @@ pub type ModuleMap = HashMap<Range<Gva>, String>;
 /// A kernel dump parser that gives access to the physical memory space stored
 /// in the dump. It also offers virtual to physical memory translation as well
 /// as a virtual read facility.
-pub struct KernelDumpParser<'reader> {
+pub struct KernelDumpParser {
     /// Which type of dump is it?
     dump_type: DumpType,
     /// Context header.
@@ -231,14 +231,14 @@ pub struct KernelDumpParser<'reader> {
     physmem: PhysmemMap,
     /// The [`Reader`] object that allows us to seek / read the dump file which
     /// could be memory mapped, read from a file, etc.
-    reader: RefCell<Box<dyn Reader + 'reader>>,
+    reader: RefCell<Box<dyn Reader>>,
     /// The driver modules loaded when the crash-dump was taken. Extracted from
     /// the nt!PsLoadedModuleList.
     kernel_modules: ModuleMap,
     user_modules: ModuleMap,
 }
 
-impl<'reader> Debug for KernelDumpParser<'reader> {
+impl Debug for KernelDumpParser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KernelDumpParser")
             .field("dump_type", &self.dump_type)
@@ -246,10 +246,10 @@ impl<'reader> Debug for KernelDumpParser<'reader> {
     }
 }
 
-impl<'reader> KernelDumpParser<'reader> {
+impl KernelDumpParser {
     /// Create an instance from a file path. This memory maps the file and
     /// parses it.
-    pub fn with_reader(mut reader: impl Reader + 'reader) -> Result<Self> {
+    pub fn with_reader(mut reader: impl Reader + 'static) -> Result<Self> {
         // Parse the dump header and check if things look right.
         let headers = Box::new(read_struct::<Header64>(&mut reader)?);
         if headers.signature != DUMP_HEADER64_EXPECTED_SIGNATURE {
@@ -543,6 +543,16 @@ impl<'reader> KernelDumpParser<'reader> {
 
         // Yay, we read as much bytes as the user wanted!
         Ok(total_read)
+    }
+
+    /// Try to read virtual memory starting at `gva` into a `buffer`.
+    pub fn try_virt_read(&self, gva: Gva, buffer: &mut [u8]) -> Result<Option<usize>> {
+        match self.virt_read(gva, buffer) {
+            Ok(o) => Ok(Some(o)),
+            // If we encountered a memory reading error, we won't consider this as a failure.
+            Err(KdmpParserError::AddrTranslation(..)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Read virtual memory starting at `gva`
