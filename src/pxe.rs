@@ -29,6 +29,7 @@ bitflags! {
         const Accessed = 1 << 5;
         const Dirty = 1 << 6;
         const LargePage = 1 << 7;
+        const Transition = 1 << 11;
         const NoExecute = 1 << 63;
     }
 }
@@ -131,7 +132,7 @@ impl Pxe {
         self.flags.contains(PxeFlags::Present)
     }
 
-    /// Is a large page?
+    /// Is it a large page?
     ///
     /// # Examples
     ///
@@ -152,6 +153,23 @@ impl Pxe {
     /// ```
     pub fn large_page(&self) -> bool {
         self.flags.contains(PxeFlags::LargePage)
+    }
+
+    /// Is it a transition PTE?
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # fn main() {
+    /// let p = Pxe::from(0x166B7880);
+    /// let np = Pxe::from(0xA000000077AF867);
+    /// assert_eq!(p.transition(), true);
+    /// assert_eq!(np.transition(), false);
+    /// # }
+    /// ```
+    pub fn transition(&self) -> bool {
+        !self.present() && self.flags.contains(PxeFlags::Transition)
     }
 }
 

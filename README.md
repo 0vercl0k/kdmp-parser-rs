@@ -1,5 +1,5 @@
 <div align='center'>
-  <h1><code>kdmp-parser-rs</code></h1>
+  <h1><code>kdmp-parser</code></h1>
   <p>
     <strong>A <a href="https://en.wikipedia.org/wiki/KISS_principle">KISS</a> Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.</strong>
   </p>
@@ -22,7 +22,7 @@ The [parser](src/examples/parser.rs) application is a small utility to show-case
 
 Here are the options supported:
 ```text
-A Rust crate for parsing Windows kernel crashdumps
+A KISS Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.
 
 Usage: parser.exe [OPTIONS] <DUMP_PATH>
 
@@ -31,11 +31,14 @@ Arguments:
           The dump path
 
 Options:
+      --dump-headers
+          Dump the dump headers
+
   -c, --context-record
-          Show the context record
+          Dump the context record
 
   -e, --exception-record
-          Show the exception record
+          Dump the exception record
 
   -m, --mem[=<MEM>]
           Dump the first `len` bytes of every physical pages, unless an address is specified
@@ -44,14 +47,21 @@ Options:
           The address specified is interpreted as a virtual address, not a physical address
 
       --len <LEN>
+          The number of bytes to dump out
+
           [default: 16]
 
   -r, --reader <READER>
+          Reader mode
+
           [default: mmap]
 
           Possible values:
           - mmap: The crash-dump is memory-mapped
           - file: The crash-dump is read as a file on disk
+
+      --modules
+          Dump the list of kernel & user modules
 
   -h, --help
           Print help (see a summary with '-h')

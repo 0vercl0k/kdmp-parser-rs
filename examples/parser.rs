@@ -3,7 +3,7 @@ use core::default::Default;
 use std::fs::File;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use kdmp_parser::{Gpa, Gva, Gxa, KernelDumpParser, MappedFileReader};
 
@@ -21,10 +21,13 @@ enum ReaderMode {
 struct Args {
     /// The dump path.
     dump_path: PathBuf,
-    /// Show the context record.
+    /// Dump the dump headers.
+    #[arg(long, default_value_t = false)]
+    dump_headers: bool,
+    /// Dump the context record.
     #[arg(short, long)]
     context_record: bool,
-    /// Show the exception record.
+    /// Dump the exception record.
     #[arg(short, long)]
     exception_record: bool,
     /// Dump the first `len` bytes of every physical pages, unless an address is
@@ -41,6 +44,9 @@ struct Args {
     /// Reader mode.
     #[arg(short, long, value_enum, default_value_t = ReaderMode::Mmap)]
     reader: ReaderMode,
+    /// Dump the list of kernel & user modules.
+    #[arg(long, default_value_t = false)]
+    modules: bool,
 }
 
 /// Print a hexdump of data that started at `address`.
@@ -90,6 +96,10 @@ fn main() -> Result<()> {
     }
     .context("failed to parse the kernel dump")?;
 
+    if args.dump_headers {
+        println!("{:?}", parser.headers());
+    }
+
     if args.context_record {
         println!("{:#x?}", parser.context_record());
     }
@@ -98,14 +108,18 @@ fn main() -> Result<()> {
         println!("{:#x?}", parser.exception_record());
     }
 
+    if args.modules {
+        for (at, module) in parser.user_modules().chain(parser.kernel_modules()) {
+            println!("{:#x}-{:#x}: {module}", at.start.u64(), at.end.u64());
+        }
+    }
+
     if let Some(addr) = args.mem {
         let mut buffer = vec![0; args.len];
         let addr = to_hex(&addr)?;
         if addr == u64::MAX {
             for (gpa, _) in parser.physmem() {
-                parser
-                    .phys_read_exact(gpa, &mut buffer)
-                    .ok_or_else(|| anyhow!("failed to read {gpa}"))?;
+                parser.phys_read_exact(gpa, &mut buffer)?;
                 hexdump(gpa.u64(), &buffer)
             }
         } else {
@@ -115,7 +129,7 @@ fn main() -> Result<()> {
                 parser.phys_read(Gpa::new(addr), &mut buffer)
             };
 
-            if let Some(amount) = amount {
+            if let Ok(amount) = amount {
                 hexdump(addr, &buffer[..amount]);
             } else {
                 println!(
