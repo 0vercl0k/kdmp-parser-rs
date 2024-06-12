@@ -28,11 +28,11 @@ struct Module {
     at: Range<Gva>,
 }
 
-impl Into<Module> for M {
-    fn into(self) -> Module {
-        Module {
-            name: self.name,
-            at: hex_str(&self.start).into()..hex_str(&self.end).into(),
+impl From<M> for Module {
+    fn from(value: M) -> Self {
+        Self {
+            name: value.name,
+            at: hex_str(&value.start).into()..hex_str(&value.end).into(),
         }
     }
 }
