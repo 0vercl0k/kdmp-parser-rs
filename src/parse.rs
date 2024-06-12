@@ -332,10 +332,7 @@ impl KernelDumpParser {
         Ok(parser)
     }
 
-    pub fn new<P>(dump_path: &P) -> Result<Self>
-    where
-        P: AsRef<Path>,
-    {
+    pub fn new(dump_path: impl AsRef<Path>) -> Result<Self> {
         // We'll assume that if you are opening a dump file larger than 4gb, you don't
         // want it memory mapped.
         let size = dump_path.as_ref().metadata()?.len();
@@ -612,11 +609,11 @@ impl KernelDumpParser {
         filter_addr_translation_err(self.virt_read_struct::<T>(gva))
     }
 
-    fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
+    pub fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
         Ok(self.reader.borrow_mut().seek(pos)?)
     }
 
-    fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
         Ok(self.reader.borrow_mut().read(buf)?)
     }
 

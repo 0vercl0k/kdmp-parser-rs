@@ -3,7 +3,8 @@
 //! Unix and Windows (cf [`memory_map_file`] / [`unmap_memory_mapped_file`]).
 use std::fmt::Debug;
 use std::io::{Read, Seek};
-use std::{convert, fs, io, path, ptr, slice};
+use std::path::Path;
+use std::{fs, io, ptr, slice};
 
 pub trait Reader: Read + Seek {}
 
@@ -24,10 +25,7 @@ impl<'map> Debug for MappedFileReader<'map> {
 
 impl<'map> MappedFileReader<'map> {
     /// Create a new [`MappedFileReader`] from a path using a memory map.
-    pub fn new<P>(path: P) -> io::Result<Self>
-    where
-        P: convert::AsRef<path::Path>,
-    {
+    pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
         // Open the file..
         let file = fs::File::open(path)?;
 
