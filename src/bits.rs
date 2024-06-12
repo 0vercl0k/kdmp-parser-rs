@@ -106,6 +106,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)]
     fn invalid_ranges() {
         assert!(std::panic::catch_unwind(|| 1u64.bits(10..=0)).is_err());
         assert!(std::panic::catch_unwind(|| 1u128.bits(0..=128)).is_err());

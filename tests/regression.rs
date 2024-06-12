@@ -28,11 +28,11 @@ struct Module {
     at: Range<Gva>,
 }
 
-impl Into<Module> for M {
-    fn into(self) -> Module {
-        Module {
-            name: self.name,
-            at: hex_str(&self.start).into()..hex_str(&self.end).into(),
+impl From<M> for Module {
+    fn from(value: M) -> Self {
+        Self {
+            name: value.name,
+            at: hex_str(&value.start).into()..hex_str(&value.end).into(),
         }
     }
 }
@@ -78,7 +78,7 @@ fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
         let found_mod = modules.iter().find(|m| m.at == *r).unwrap();
         seen.insert(r.start);
 
-        let filename = name.rsplit_once('\\').map(|(_, s)| s).unwrap_or(&name);
+        let filename = name.rsplit_once('\\').map(|(_, s)| s).unwrap_or(name);
         if filename.to_lowercase() != found_mod.name.to_lowercase() {
             if found_mod.name == "nt" && filename == "ntoskrnl.exe" {
                 continue;

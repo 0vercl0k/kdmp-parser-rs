@@ -57,7 +57,7 @@ jobs:
       - name: cargo clippy
         env:
           RUSTFLAGS: "-Dwarnings"
-        run: cargo clippy --example parser
+        run: cargo clippy --workspace --tests --examples
 
   doc:
     name: doc
@@ -99,18 +99,18 @@ jobs:
       - name: cargo test
         env:
           TESTDATAS: "."
-        run: cargo test
+        run: cargo test --workspace
 
       - name: cargo test release
         env:
           TESTDATAS: "."
-        run: cargo test --release
+        run: cargo test --release --workspace
 
       - name: cargo check
-        run: cargo check
+        run: cargo check --workspace
 
       - name: cargo build
-        run: cargo build --release --example parser
+        run: cargo build --release --examples
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
