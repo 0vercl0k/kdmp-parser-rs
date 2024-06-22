@@ -66,7 +66,6 @@ struct TestcaseValues<'test> {
 }
 
 fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
-    eprintln!("{parser:?}");
     let parser_modules = parser.user_modules().chain(parser.kernel_modules());
     let mut seen = HashSet::new();
     for (r, name) in parser_modules {
@@ -297,20 +296,70 @@ fn regressions() {
         modules: &modules_3,
     };
 
-    let tests = [&bmp, &full, &kernel_dump, &kernel_user_dump, &complete_dump];
+    let modules_4: Vec<M> =
+        serde_json::from_reader(File::open(test_dir.join("modules_4.json")).unwrap()).unwrap();
+    let modules_4 = modules_4
+        .into_iter()
+        .map(|m| m.into())
+        .collect::<Vec<Module>>();
+
+    let live_kernel = TestcaseValues {
+        file: base_path.join("fulllivekernelmemory.dmp"),
+        dump_type: kdmp_parser::DumpType::LiveKernelMemory,
+        size: 0x01_54_f5,
+        phys_addr: 0xd9_6a_90_00,
+        phys_bytes: [
+            0x67, 0xd8, 0xb6, 0xdd, 0x00, 0x00, 0x00, 0x0a, 0x67, 0xa8, 0x1d, 0xd6, 0x00, 0x00,
+            0x00, 0x0a,
+        ],
+        virt_addr: 0xfffff807_50a98b6d,
+        virt_bytes: [
+            0x48, 0x8d, 0x8f, 0x00, 0x01, 0x00, 0x00, 0xe8, 0x17, 0x2a, 0x98, 0xff, 0x48, 0x81,
+            0xc3, 0x48,
+        ],
+        rax: 0x00000000_00000004,
+        rbx: 0xffffd20f_d8553000,
+        rcx: 0xffffa100_0ed84a00,
+        rdx: 0x00000000_00000000,
+        rsi: 0xffffd20f_d3beeae0,
+        rdi: 0xfffff807_4fb4b180,
+        rip: 0xfffff807_50a98b6d,
+        rsp: 0xfffffd8d_6bcaed10,
+        rbp: 0x00000000_00000000,
+        r8: 0x00000000_00000b80,
+        r9: 0xffffd20f_d8553348,
+        r10: 0x00000000_00000000,
+        r11: 0xffffd20f_d8553000,
+        r12: 0x00000000_00000002,
+        r13: 0x00000000_00000000,
+        r14: 0xffffd20f_d48d5080,
+        r15: 0x00000000_00000001,
+        modules: &modules_4,
+    };
+
+    let tests = [
+        &bmp,
+        &full,
+        &kernel_dump,
+        &kernel_user_dump,
+        &complete_dump,
+        &live_kernel,
+    ];
+
     for test in tests {
         let parser = KernelDumpParser::new(&test.file).unwrap();
+        eprintln!("{parser:?}");
         assert_eq!(parser.dump_type(), test.dump_type);
         assert_eq!(parser.physmem().len(), test.size as usize);
-        let mut buffer = [0; 16];
+        let mut buf = [0; 16];
         parser
-            .phys_read_exact(Gpa::new(test.phys_addr), &mut buffer)
+            .phys_read_exact(Gpa::new(test.phys_addr), &mut buf)
             .unwrap();
-        assert_eq!(buffer, test.phys_bytes);
+        assert_eq!(buf, test.phys_bytes);
         parser
-            .virt_read_exact(Gva::new(test.virt_addr), &mut buffer)
+            .virt_read_exact(Gva::new(test.virt_addr), &mut buf)
             .unwrap();
-        assert_eq!(buffer, test.virt_bytes);
+        assert_eq!(buf, test.virt_bytes);
         let ctx = parser.context_record();
         assert_eq!(ctx.rax, test.rax);
         assert_eq!(ctx.rbx, test.rbx);

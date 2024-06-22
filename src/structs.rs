@@ -26,6 +26,8 @@ pub enum DumpType {
     Bmp = 0x5,
     /// Produced by `.dump /m`.
     // Mini = 0x4,
+    /// (22H2+) Produced by TaskMgr > System > Create live kernel Memory Dump.
+    LiveKernelMemory = 0x6,
     /// Produced by `.dump /k`.
     KernelMemory = 0x8,
     /// Produced by `.dump /ka`.
@@ -47,6 +49,7 @@ impl TryFrom<u32> for DumpType {
             x if x == DumpType::KernelMemory as u32 => Ok(DumpType::KernelMemory),
             x if x == DumpType::KernelAndUserMemory as u32 => Ok(DumpType::KernelAndUserMemory),
             x if x == DumpType::CompleteMemory as u32 => Ok(DumpType::CompleteMemory),
+            x if x == DumpType::LiveKernelMemory as u32 => Ok(DumpType::LiveKernelMemory),
             _ => Err(KdmpParserError::UnknownDumpType(value)),
         }
     }
