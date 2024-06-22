@@ -403,9 +403,9 @@ impl KernelDumpParser {
     }
 
     /// Read physical memory starting at `gpa` into a `buffer`.
-    pub fn phys_read(&self, gpa: Gpa, buffer: &mut [u8]) -> Result<usize> {
+    pub fn phys_read(&self, gpa: Gpa, buf: &mut [u8]) -> Result<usize> {
         // Amount of bytes left to read.
-        let mut amount_left = buffer.len();
+        let mut amount_left = buf.len();
         // Total amount of bytes that we have successfully read.
         let mut total_read = 0;
         // The current gpa we are reading from.
@@ -423,7 +423,7 @@ impl KernelDumpParser {
             let left_in_page = (Page::size() - gpa.offset()) as usize;
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
-            let slice = &mut buffer[total_read..total_read + amount_wanted];
+            let slice = &mut buf[total_read..total_read + amount_wanted];
             // Read the physical memory!
             let amount_read = self.read(slice)?;
             // Update the total amount of read bytes and how much work we have left.
@@ -444,12 +444,12 @@ impl KernelDumpParser {
 
     /// Read an exact amount of physical memory starting at `gpa` into a
     /// `buffer`.
-    pub fn phys_read_exact(&self, gpa: Gpa, buffer: &mut [u8]) -> Result<()> {
+    pub fn phys_read_exact(&self, gpa: Gpa, buf: &mut [u8]) -> Result<()> {
         // Read physical memory.
-        let len = self.phys_read(gpa, buffer)?;
+        let len = self.phys_read(gpa, buf)?;
 
         // If we read as many bytes as we wanted, then it's a win..
-        if len == buffer.len() {
+        if len == buf.len() {
             Ok(())
         }
         // ..otherwise, we call it quits.
@@ -525,9 +525,9 @@ impl KernelDumpParser {
     }
 
     /// Read virtual memory starting at `gva` into a `buffer`.
-    pub fn virt_read(&self, gva: Gva, buffer: &mut [u8]) -> Result<usize> {
+    pub fn virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<usize> {
         // Amount of bytes left to read.
-        let mut amount_left = buffer.len();
+        let mut amount_left = buf.len();
         // Total amount of bytes that we have successfully read.
         let mut total_read = 0;
         // The current gva we are reading from.
@@ -541,7 +541,7 @@ impl KernelDumpParser {
             let left_in_page = (Page::size() - addr.offset()) as usize;
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
-            let slice = &mut buffer[total_read..total_read + amount_wanted];
+            let slice = &mut buf[total_read..total_read + amount_wanted];
             // Translate the gva into a gpa..
             let gpa = self.virt_translate(addr)?;
             // .. and read the physical memory!
@@ -565,17 +565,17 @@ impl KernelDumpParser {
     /// Try to read virtual memory starting at `gva` into a `buffer`.  If a
     /// memory translation error occurs, it'll return `None` instead of an
     /// error.
-    pub fn try_virt_read(&self, gva: Gva, buffer: &mut [u8]) -> Result<Option<usize>> {
-        filter_addr_translation_err(self.virt_read(gva, buffer))
+    pub fn try_virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<usize>> {
+        filter_addr_translation_err(self.virt_read(gva, buf))
     }
 
     /// Read an exact amount of virtual memory starting at `gva`.
-    pub fn virt_read_exact(&self, gva: Gva, buffer: &mut [u8]) -> Result<()> {
+    pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<()> {
         // Read virtual memory.
-        let len = self.virt_read(gva, buffer)?;
+        let len = self.virt_read(gva, buf)?;
 
         // If we read as many bytes as we wanted, then it's a win..
-        if len == buffer.len() {
+        if len == buf.len() {
             Ok(())
         }
         // ..otherwise, we call it quits.
@@ -587,8 +587,8 @@ impl KernelDumpParser {
     /// Try to read an exact amount of virtual memory starting at `gva`. If a
     /// memory translation error occurs, it'll return `None` instead of an
     /// error.
-    pub fn try_virt_read_exact(&self, gva: Gva, buffer: &mut [u8]) -> Result<Option<()>> {
-        filter_addr_translation_err(self.virt_read_exact(gva, buffer))
+    pub fn try_virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
+        filter_addr_translation_err(self.virt_read_exact(gva, buf))
     }
 
     /// Read a `T` from virtual memory.
@@ -824,7 +824,7 @@ impl KernelDumpParser {
         use DumpType as D;
         match dump_type {
             D::Full => Self::full_physmem(headers, reader),
-            D::Bmp => Self::bmp_physmem(reader),
+            D::Bmp | D::LiveKernelMemory => Self::bmp_physmem(reader),
             D::KernelMemory | D::KernelAndUserMemory | D::CompleteMemory => {
                 Self::kernel_physmem(dump_type, reader)
             }
