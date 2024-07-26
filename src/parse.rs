@@ -18,7 +18,7 @@ use crate::structs::{
     read_struct, BmpHeader64, Context, DumpType, ExceptionRecord64, FullRdmpHeader64, Header64,
     KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange,
     PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString, DUMP_HEADER64_EXPECTED_SIGNATURE,
-    DUMP_HEADER64_EXPECTED_VALID_DUMP,
+    DUMP_HEADER64_EXPECTED_VALID_DUMP, LdrDataTableEntry32, ListEntry32, UnicodeString32,
 };
 use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
@@ -62,6 +62,55 @@ fn try_read_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result<Optio
                 if s.is_none() {
                     // If we failed to read the `full_dll_name`, give `base_dll_name` a shot.
                     parser.try_virt_read_unicode_string(&data.base_dll_name)
+                } else {
+                    Ok(s)
+                }
+            })?
+        else {
+            return Ok(None);
+        };
+
+        // Shove it into the map.
+        let dll_end_addr = data
+            .dll_base
+            .checked_add(data.size_of_image.into())
+            .ok_or_else(|| KdmpParserError::Overflow("module address"))?;
+        let at = data.dll_base.into()..dll_end_addr.into();
+        let inserted = modules.insert(at, dll_name);
+        debug_assert!(inserted.is_none());
+
+        // Go to the next entry.
+        entry_addr = data.in_load_order_links.flink.into();
+    }
+
+    Ok(Some(modules))
+}
+
+/// (WoW64) Walk a LIST_ENTRY32 of LdrDataTableEntry32. It is used to dump only the WoW64
+/// module list
+fn try_read_wow64_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result<Option<ModuleMap>> {
+    let mut modules = ModuleMap::new();
+    let Some(entry) = parser.try_virt_read_struct::<ListEntry32>(head)? else {
+        return Ok(None);
+    };
+
+    let mut entry_addr = entry.flink.into();
+
+    // We'll walk it until we hit the starting point (it is circular).
+    while entry_addr != head {
+        // Read the table entry..
+        let Some(data) = parser.try_virt_read_struct::<LdrDataTableEntry32>(entry_addr)? else {
+            return Ok(None);
+        };
+
+        // ..and read it. We first try to read `full_dll_name` but will try
+        // `base_dll_name` is we couldn't read the former.
+        let Some(dll_name) = parser
+            .try_virt_read_unicode_string_32(&data.full_dll_name)
+            .and_then(|s| {
+                if s.is_none() {
+                    // If we failed to read the `full_dll_name`, give `base_dll_name` a shot.
+                    parser.try_virt_read_unicode_string_32(&data.base_dll_name)
                 } else {
                     Ok(s)
                 }
@@ -212,6 +261,92 @@ fn try_extract_user_modules(
     try_read_module_map(parser, module_list_entry_addr.into())
 }
 
+fn try_extract_wow64_user_modules(
+    parser: &mut KernelDumpParser,
+    kd_debugger_data_block: &KdDebuggerData64,
+    prcb_addr: Gva,
+) -> Result<Option<ModuleMap>> {
+    // Get the current _KTHREAD..
+    let kthread_addr = prcb_addr
+        .u64()
+        .checked_add(kd_debugger_data_block.offset_prcb_current_thread.into())
+        .ok_or(KdmpParserError::Overflow("offset prcb current thread"))?;
+    let Some(kthread_addr) = parser.try_virt_read_struct::<u64>(kthread_addr.into())? else {
+        return Ok(None);
+    };
+
+    // ..then its TEB..
+    let teb_addr = kthread_addr
+        .checked_add(kd_debugger_data_block.offset_kthread_teb.into())
+        .ok_or(KdmpParserError::Overflow("offset kthread teb"))?;
+    let Some(teb_addr) = parser.try_virt_read_struct::<u64>(teb_addr.into())? else {
+        return Ok(None);
+    };
+
+    if teb_addr == 0 {
+        return Ok(None);
+    }
+
+    // TEB32 is at offset 0x2000 from TEB
+    // And then PEB32 is at offset 0x30 from TEB32
+    // ```
+    // kd> dt nt!_TEB32 ProcessEnvironmentBlock
+    // nt!_TEB32
+    //    +0x030 ProcessEnvironmentBlock : Uint4B
+    // ```
+    
+    let teb32_offset = 0x2000;    
+    let teb32_addr = teb_addr
+        .checked_add(teb32_offset)
+        .ok_or(KdmpParserError::Overflow("teb32 offset"))?;
+    let peb32_offset = 0x30;
+    let peb32_addr = teb32_addr
+        .checked_add(peb32_offset)
+        .ok_or(KdmpParserError::Overflow("peb32_offset"))?;
+    let Some(peb32_addr) = parser.try_virt_read_struct::<u32>(peb32_addr.into())? else {
+        return Ok(None);
+    };
+
+    // ..then its _PEB_LDR_DATA.. (32-bit)
+    // ```
+    // kd> dt nt!_PEB32 Ldr
+    // +0x00c Ldr              : Uint4B
+    // ```
+    let ldr_offset = 0x0c;
+    let peb32_ldr_addr = peb32_addr
+        .checked_add(ldr_offset)
+        .ok_or(KdmpParserError::Overflow("ldr offset"))?;
+    let Some(peb32_ldr_addr) = parser.try_virt_read_struct::<u32>(peb32_ldr_addr.into())? else {
+        return Ok(None);
+    };
+
+    // ..and finally the `InLoadOrderModuleList`.
+    // https://github.com/winsiderss/phnt/blob/master/ntwow64.h
+    // ```
+    // typedef struct _PEB_LDR_DATA32
+    // {
+    //     +0x000 ULONG Length;
+    //     +0x004 BOOLEAN Initialized;
+    //     +0x008 WOW64_POINTER(HANDLE) SsHandle;
+    //     +0x00c LIST_ENTRY32 InLoadOrderModuleList;
+    //     +0x014 LIST_ENTRY32 InMemoryOrderModuleList;
+    //     +0x01c LIST_ENTRY32 InInitializationOrderModuleList;
+    //     +0x024 WOW64_POINTER(PVOID) EntryInProgress;
+    //     +0x028 BOOLEAN ShutdownInProgress;
+    //     +0x030 WOW64_POINTER(HANDLE) ShutdownThreadId;
+    // } PEB_LDR_DATA32, *PPEB_LDR_DATA32;
+    // ````
+    let in_load_order_module_list_offset = 0xc;
+    let module_list_entry_addr = peb32_ldr_addr
+        .checked_add(in_load_order_module_list_offset)
+        .ok_or(KdmpParserError::Overflow(
+            "in load order module list offset",
+        ))?;
+
+    // From there, we walk the list!
+    try_read_wow64_module_map(parser, module_list_entry_addr.into())
+}
+
 /// Filter out [`AddrTranslationError`] errors and turn them into `None`. This
 /// makes it easier for caller code to write logic that can recover from a
 /// memory read failure by bailing out for example, and not bubbling up an
@@ -251,6 +386,9 @@ pub struct KernelDumpParser {
     /// The user modules / DLLs loaded when the crash-dump was taken. Extract
     /// from the current PEB.Ldr.InLoadOrderModuleList.
     user_modules: ModuleMap,
+    /// The WoW64 user modules / DLLs loaded when the crash-dump was taken. Extract
+    /// from the current PEB32.Ldr.InLoadOrderModuleList.
+    wow64_user_modules: ModuleMap,
 }
 
 impl Debug for KernelDumpParser {
@@ -295,6 +433,7 @@ impl KernelDumpParser {
             reader,
             kernel_modules: Default::default(),
             user_modules: Default::default(),
+            wow64_user_modules: Default::default()
         };
 
         // Extract the kernel modules if we can. If it fails because of a memory
@@ -328,6 +467,16 @@ impl KernelDumpParser {
         };
 
         parser.user_modules.extend(user_modules);
+
+        
+        // Additionally, extract WoW64 user modules
+        let Some(wow64_user_modules) =
+            try_extract_wow64_user_modules(&mut parser, &kd_debugger_data_block, prcb_addr)?
+        else {
+            return Ok(parser);
+        };
+
+        parser.wow64_user_modules.extend(wow64_user_modules);
 
         Ok(parser)
     }
@@ -367,6 +516,11 @@ impl KernelDumpParser {
     /// User modules loaded when the dump was taken.
     pub fn user_modules(&self) -> impl ExactSizeIterator<Item = (&Range<Gva>, &str)> + '_ {
         self.user_modules.iter().map(|(k, v)| (k, v.as_str()))
+    }
+
+    /// WoW64 User modules loaded when the dump was taken.
+    pub fn wow64_user_modules(&self) -> impl ExactSizeIterator<Item = (&Range<Gva>, &str)> + '_ {
+        self.wow64_user_modules.iter().map(|(k, v)| (k, v.as_str()))
     }
 
     /// What kind of dump is it?
@@ -619,6 +773,28 @@ impl KernelDumpParser {
 
     /// Try to read a `UNICODE_STRING`.
     fn try_virt_read_unicode_string(&self, unicode_str: &UnicodeString) -> Result<Option<String>> {
+        if (unicode_str.length % 2) != 0 {
+            return Err(KdmpParserError::InvalidUnicodeString);
+        }
+
+        let mut buffer = vec![0; unicode_str.length.into()];
+        match self.virt_read_exact(unicode_str.buffer.into(), &mut buffer) {
+            Ok(_) => {}
+            // If we encountered a memory translation error, we don't consider this a failure.
+            Err(KdmpParserError::AddrTranslation(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+
+        let n = unicode_str.length / 2;
+
+        Ok(Some(String::from_utf16(unsafe {
+            slice::from_raw_parts(buffer.as_ptr().cast(), n.into())
+        })?))
+    }
+
+    /// Try to read a `UNICODE_STRING`.
+    fn try_virt_read_unicode_string_32(&self, unicode_str: &UnicodeString32) -> Result<Option<String>> {
+
         if (unicode_str.length % 2) != 0 {
             return Err(KdmpParserError::InvalidUnicodeString);
         }

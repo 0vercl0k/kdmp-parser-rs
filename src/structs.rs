@@ -461,10 +461,25 @@ pub struct ListEntry {
 
 #[repr(C)]
 #[derive(Debug, Default)]
+pub struct ListEntry32 {
+    pub flink: u32,
+    pub blink: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
 pub struct UnicodeString {
     pub length: u16,
     pub maximum_length: u16,
     pub buffer: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct UnicodeString32 {
+    pub length: u16,
+    pub maximum_length: u16,
+    pub buffer: u32,
 }
 
 #[repr(C)]
@@ -479,6 +494,19 @@ pub struct LdrDataTableEntry {
     reserved1: u32,
     pub full_dll_name: UnicodeString,
     pub base_dll_name: UnicodeString,
+}
+
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct LdrDataTableEntry32 {
+    pub in_load_order_links: ListEntry32,
+    pub in_memory_order_links: ListEntry32,
+    pub in_initialization_order_links: ListEntry32,
+    pub dll_base: u32,
+    pub entry_point: u32,
+    pub size_of_image: u32,
+    pub full_dll_name: UnicodeString32,
+    pub base_dll_name: UnicodeString32,
 }
 
 // Copied from `WDBGEXTS.H`.
