@@ -16,9 +16,9 @@ use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
     read_struct, BmpHeader64, Context, DumpType, ExceptionRecord64, FullRdmpHeader64, Header64,
-    KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange,
-    PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString, DUMP_HEADER64_EXPECTED_SIGNATURE,
-    DUMP_HEADER64_EXPECTED_VALID_DUMP, LdrDataTableEntry32, ListEntry32, UnicodeString32,
+    KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, LdrDataTableEntry32, ListEntry,
+    ListEntry32, Page, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString,
+    UnicodeString32, DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
 };
 use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
@@ -86,9 +86,12 @@ fn try_read_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result<Optio
     Ok(Some(modules))
 }
 
-/// (WoW64) Walk a LIST_ENTRY32 of LdrDataTableEntry32. It is used to dump only the WoW64
-/// module list
-fn try_read_wow64_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result<Option<ModuleMap>> {
+/// (WoW64) Walk a LIST_ENTRY32 of LdrDataTableEntry32. It is used to dump only
+/// the WoW64 module list
+fn try_read_wow64_module_map(
+    parser: &mut KernelDumpParser,
+    head: Gva,
+) -> Result<Option<ModuleMap>> {
     let mut modules = ModuleMap::new();
     let Some(entry) = parser.try_virt_read_struct::<ListEntry32>(head)? else {
         return Ok(None);
@@ -122,7 +125,7 @@ fn try_read_wow64_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result
         // Shove it into the map.
         let dll_end_addr = data
             .dll_base
-            .checked_add(data.size_of_image.into())
+            .checked_add(data.size_of_image)
             .ok_or_else(|| KdmpParserError::Overflow("module address"))?;
         let at = data.dll_base.into()..dll_end_addr.into();
         let inserted = modules.insert(at, dll_name);
@@ -294,8 +297,8 @@ fn try_extract_wow64_user_modules(
     // nt!_TEB32
     //    +0x030 ProcessEnvironmentBlock : Uint4B
     // ```
-    
-    let teb32_offset = 0x2000;    
+
+    let teb32_offset = 0x2000;
     let teb32_addr = teb_addr
         .checked_add(teb32_offset)
         .ok_or(KdmpParserError::Overflow("teb32 offset"))?;
@@ -386,8 +389,8 @@ pub struct KernelDumpParser {
     /// The user modules / DLLs loaded when the crash-dump was taken. Extract
     /// from the current PEB.Ldr.InLoadOrderModuleList.
     user_modules: ModuleMap,
-    /// The WoW64 user modules / DLLs loaded when the crash-dump was taken. Extract
-    /// from the current PEB32.Ldr.InLoadOrderModuleList.
+    /// The WoW64 user modules / DLLs loaded when the crash-dump was taken.
+    /// Extract from the current PEB32.Ldr.InLoadOrderModuleList.
     wow64_user_modules: ModuleMap,
 }
 
@@ -433,7 +436,7 @@ impl KernelDumpParser {
             reader,
             kernel_modules: Default::default(),
             user_modules: Default::default(),
-            wow64_user_modules: Default::default()
+            wow64_user_modules: Default::default(),
         };
 
         // Extract the kernel modules if we can. If it fails because of a memory
@@ -468,7 +471,6 @@ impl KernelDumpParser {
 
         parser.user_modules.extend(user_modules);
 
-        
         // Additionally, extract WoW64 user modules
         let Some(wow64_user_modules) =
             try_extract_wow64_user_modules(&mut parser, &kd_debugger_data_block, prcb_addr)?
@@ -793,8 +795,10 @@ impl KernelDumpParser {
     }
 
     /// Try to read a `UNICODE_STRING`.
-    fn try_virt_read_unicode_string_32(&self, unicode_str: &UnicodeString32) -> Result<Option<String>> {
-
+    fn try_virt_read_unicode_string_32(
+        &self,
+        unicode_str: &UnicodeString32,
+    ) -> Result<Option<String>> {
         if (unicode_str.length % 2) != 0 {
             return Err(KdmpParserError::InvalidUnicodeString);
         }

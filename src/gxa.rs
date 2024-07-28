@@ -452,7 +452,6 @@ impl From<&Gva> for u64 {
     }
 }
 
-
 /// Convert a [`&Gva`][Gva] into a [`u64`].
 impl From<&Gva> for u32 {
     /// Create a [`u32`] from a [&Gpa][`Gpa`].
