@@ -399,7 +399,7 @@ fn regressions() {
         0xe0, 0x07, 0xa3, 0x2e, 0xa4, 0x01, 0x00, 0x00, 0x80, 0xf2, 0xa2, 0x2e, 0xa4, 0x01, 0x00,
         0x00,
     ];
-    assert!(parser.virt_read(0x1a42ea30240.into(), &mut buffer).is_ok());
+    assert!(parser.virt_read(0x1a42ea30240u64.into(), &mut buffer).is_ok());
     assert_eq!(buffer, expected_buffer);
     // Example of a valid PTE that don't have a physical page backing it (in
     // kerneldump.dmp):
@@ -425,14 +425,14 @@ fn regressions() {
     let parser = KernelDumpParser::new(&kernel_dump.file).unwrap();
     let mut buffer = [0];
     assert!(matches!(
-        parser.virt_read(0x1a42ea30240.into(), &mut buffer),
+        parser.virt_read(0x1a42ea30240u64.into(), &mut buffer),
         Err(KdmpParserError::AddrTranslation(
             AddrTranslationError::Phys(gpa)
         )) if gpa == 0x166b7240.into()
     ));
 
     assert!(matches!(
-        parser.virt_read(0x16e23fa060.into(), &mut buffer),
+        parser.virt_read(0x16e23fa060u64.into(), &mut buffer),
         Err(KdmpParserError::AddrTranslation(
             AddrTranslationError::Phys(gpa)
         )) if gpa == 0x1bc4060.into()
