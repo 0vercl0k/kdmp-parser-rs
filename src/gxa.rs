@@ -373,7 +373,7 @@ impl From<u64> for Gva {
     }
 }
 
-/// Convert a [`Gva`] into a [`u64`].
+/// Convert a [`Gva`] into a [`u32`].
 impl From<u32> for Gva {
     /// Create a [`Gva`] from a [`u32`].
     ///
@@ -411,7 +411,7 @@ impl From<Gva> for u64 {
     }
 }
 
-/// Convert a [`Gva`] into a [`u64`].
+/// Convert a [`Gva`] into a [`u32`].
 impl From<Gva> for u32 {
     /// Create a [`u32`] from a [`Gva`].
     ///
@@ -452,7 +452,7 @@ impl From<&Gva> for u64 {
     }
 }
 
-/// Convert a [`&Gva`][Gva] into a [`u64`].
+/// Convert a [`&Gva`][Gva] into a [`u32`].
 impl From<&Gva> for u32 {
     /// Create a [`u32`] from a [&Gpa][`Gpa`].
     ///
