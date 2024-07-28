@@ -17,8 +17,8 @@ use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
     read_struct, BmpHeader64, Context, DumpType, ExceptionRecord64, FullRdmpHeader64, Header64,
     KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange,
-    PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString,
-    DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
+    PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString, DUMP_HEADER64_EXPECTED_SIGNATURE,
+    DUMP_HEADER64_EXPECTED_VALID_DUMP,
 };
 use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
