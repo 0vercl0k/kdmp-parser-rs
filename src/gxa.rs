@@ -373,24 +373,6 @@ impl From<u64> for Gva {
     }
 }
 
-/// Convert a [`Gva`] into a [`u32`].
-impl From<u32> for Gva {
-    /// Create a [`Gva`] from a [`u32`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
-    /// # fn main() {
-    /// let gva = Gva::from(0xdeadbeef);
-    /// assert_eq!(u32::from(gva), 0xdeadbeef);
-    /// # }
-    /// ```
-    fn from(value: u32) -> Self {
-        Gva(value.into())
-    }
-}
-
 /// Convert a [`Gva`] into a [`u64`].
 impl From<Gva> for u64 {
     /// Create a [`u64`] from a [`Gva`].
@@ -408,26 +390,6 @@ impl From<Gva> for u64 {
     /// ```
     fn from(value: Gva) -> Self {
         value.0
-    }
-}
-
-/// Convert a [`Gva`] into a [`u32`].
-impl From<Gva> for u32 {
-    /// Create a [`u32`] from a [`Gva`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
-    /// # fn main() {
-    /// let gva = Gva::new(0xdeadbeef);
-    /// let gva_u32: u32 = gva.into();
-    /// assert_eq!(gva_u32, 0xdeadbeef);
-    /// assert_eq!(u32::from(gva), 0xdeadbeef);
-    /// # }
-    /// ```
-    fn from(value: Gva) -> Self {
-        value.0.try_into().unwrap()
     }
 }
 
@@ -449,27 +411,6 @@ impl From<&Gva> for u64 {
     /// ```
     fn from(value: &Gva) -> Self {
         value.0
-    }
-}
-
-/// Convert a [`&Gva`][Gva] into a [`u32`].
-impl From<&Gva> for u32 {
-    /// Create a [`u32`] from a [&Gpa][`Gpa`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use kdmp_parser::{Gxa, Gpa};
-    /// # fn main() {
-    /// let gva = Gpa::new(0xdeadbeef);
-    /// let gva_p = &gva;
-    /// let gva_u32: u32 = gva_p.into();
-    /// assert_eq!(gva_u32, 0xdeadbeef);
-    /// assert_eq!(u32::from(gva_p), 0xdeadbeef);
-    /// # }
-    /// ```
-    fn from(value: &Gva) -> Self {
-        value.0.try_into().unwrap()
     }
 }
 
