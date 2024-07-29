@@ -345,9 +345,6 @@ pub struct KernelDumpParser {
     /// The user modules / DLLs loaded when the crash-dump was taken. Extract
     /// from the current PEB.Ldr.InLoadOrderModuleList.
     user_modules: ModuleMap,
-    /// The WoW64 user modules / DLLs loaded when the crash-dump was taken.
-    /// Extract from the current PEB32.Ldr.InLoadOrderModuleList.
-    wow64_user_modules: ModuleMap,
 }
 
 impl Debug for KernelDumpParser {
@@ -392,7 +389,6 @@ impl KernelDumpParser {
             reader,
             kernel_modules: Default::default(),
             user_modules: Default::default(),
-            wow64_user_modules: Default::default(),
         };
 
         // Extract the kernel modules if we can. If it fails because of a memory
@@ -465,11 +461,6 @@ impl KernelDumpParser {
     /// User modules loaded when the dump was taken.
     pub fn user_modules(&self) -> impl ExactSizeIterator<Item = (&Range<Gva>, &str)> + '_ {
         self.user_modules.iter().map(|(k, v)| (k, v.as_str()))
-    }
-
-    /// WoW64 User modules loaded when the dump was taken.
-    pub fn wow64_user_modules(&self) -> impl ExactSizeIterator<Item = (&Range<Gva>, &str)> + '_ {
-        self.wow64_user_modules.iter().map(|(k, v)| (k, v.as_str()))
     }
 
     /// What kind of dump is it?
