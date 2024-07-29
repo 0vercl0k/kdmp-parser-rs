@@ -38,13 +38,15 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
 }
 
-trait CheckedAdd: Sized + Copy {
+// This trait is was we use to be able to implement generic behavior for
+// 32/64-bit. We'll implement it for [`u32`] & [`u64`].
+trait PtrSize: Sized + Copy + Into<u64> + From<u32> {
     fn checked_add(self, rhs: Self) -> Option<Self>;
 }
 
 macro_rules! impl_checked_add {
     ($($ty:ident),*) => {
-        $(impl CheckedAdd for $ty {
+        $(impl PtrSize for $ty {
             fn checked_add(self, rhs: $ty) -> Option<Self> {
                 $ty::checked_add(self, rhs)
             }
@@ -58,12 +60,7 @@ impl_checked_add!(u32, u64);
 /// driver / module lists.
 fn try_read_module_map<P>(parser: &mut KernelDumpParser, head: Gva) -> Result<Option<ModuleMap>>
 where
-    // We need to be able to get `P` into a `u64` to build a `Gva`..
-    P: Into<u64>,
-    // .. we need `P` to support `checked_add`..
-    P: CheckedAdd,
-    // .. and we need to make a `P` from a `u32`.
-    P: From<u32>,
+    P: PtrSize,
 {
     let mut modules = ModuleMap::new();
     let Some(entry) = parser.try_virt_read_struct::<ListEntry<P>>(head)? else {
@@ -233,43 +230,19 @@ fn try_extract_user_modules(
         ))?;
 
     // From there, we walk the list!
-    try_read_module_map::<u64>(parser, module_list_entry_addr.into())
-}
-
-fn try_extract_wow64_user_modules(
-    parser: &mut KernelDumpParser,
-    kd_debugger_data_block: &KdDebuggerData64,
-    prcb_addr: Gva,
-) -> Result<Option<ModuleMap>> {
-    // Get the current _KTHREAD..
-    let kthread_addr = prcb_addr
-        .u64()
-        .checked_add(kd_debugger_data_block.offset_prcb_current_thread.into())
-        .ok_or(KdmpParserError::Overflow("offset prcb current thread"))?;
-    let Some(kthread_addr) = parser.try_virt_read_struct::<u64>(kthread_addr.into())? else {
+    let Some(mut modules) = try_read_module_map::<u64>(parser, module_list_entry_addr.into())?
+    else {
         return Ok(None);
     };
 
-    // ..then its TEB..
-    let teb_addr = kthread_addr
-        .checked_add(kd_debugger_data_block.offset_kthread_teb.into())
-        .ok_or(KdmpParserError::Overflow("offset kthread teb"))?;
-    let Some(teb_addr) = parser.try_virt_read_struct::<u64>(teb_addr.into())? else {
-        return Ok(None);
-    };
-
-    if teb_addr == 0 {
-        return Ok(None);
-    }
-
-    // TEB32 is at offset 0x2000 from TEB
-    // And then PEB32 is at offset 0x30 from TEB32
+    // Now, it's time to dump the TEB32 if there's one.
+    //
+    // TEB32 is at offset 0x2000 from TEB and PEB32 is at +0x30:
     // ```
     // kd> dt nt!_TEB32 ProcessEnvironmentBlock
     // nt!_TEB32
-    //    +0x030 ProcessEnvironmentBlock : Uint4B
+    // +0x030 ProcessEnvironmentBlock : Uint4B
     // ```
-
     let teb32_offset = 0x2000;
     let teb32_addr = teb_addr
         .checked_add(teb32_offset)
@@ -277,9 +250,9 @@ fn try_extract_wow64_user_modules(
     let peb32_offset = 0x30;
     let peb32_addr = teb32_addr
         .checked_add(peb32_offset)
-        .ok_or(KdmpParserError::Overflow("peb32_offset"))?;
+        .ok_or(KdmpParserError::Overflow("peb32 offset"))?;
     let Some(peb32_addr) = parser.try_virt_read_struct::<u32>(peb32_addr.into())? else {
-        return Ok(None);
+        return Ok(Some(modules));
     };
 
     // ..then its _PEB_LDR_DATA.. (32-bit)
@@ -290,27 +263,26 @@ fn try_extract_wow64_user_modules(
     let ldr_offset = 0x0c;
     let peb32_ldr_addr = peb32_addr
         .checked_add(ldr_offset)
-        .ok_or(KdmpParserError::Overflow("ldr offset"))?;
+        .ok_or(KdmpParserError::Overflow("ldr32 offset"))?;
     let Some(peb32_ldr_addr) =
         parser.try_virt_read_struct::<u32>(Gva::new(peb32_ldr_addr.into()))?
     else {
-        return Ok(None);
+        return Ok(Some(modules));
     };
 
     // ..and finally the `InLoadOrderModuleList`.
     // https://github.com/winsiderss/phnt/blob/master/ntwow64.h
     // ```
-    // typedef struct _PEB_LDR_DATA32
-    // {
-    //     +0x000 ULONG Length;
-    //     +0x004 BOOLEAN Initialized;
-    //     +0x008 WOW64_POINTER(HANDLE) SsHandle;
-    //     +0x00c LIST_ENTRY32 InLoadOrderModuleList;
-    //     +0x014 LIST_ENTRY32 InMemoryOrderModuleList;
-    //     +0x01c LIST_ENTRY32 InInitializationOrderModuleList;
-    //     +0x024 WOW64_POINTER(PVOID) EntryInProgress;
-    //     +0x028 BOOLEAN ShutdownInProgress;
-    //     +0x030 WOW64_POINTER(HANDLE) ShutdownThreadId;
+    // struct {
+    // +0x000 ULONG Length;
+    // +0x004 BOOLEAN Initialized;
+    // +0x008 WOW64_POINTER(HANDLE) SsHandle;
+    // +0x00c LIST_ENTRY32 InLoadOrderModuleList;
+    // +0x014 LIST_ENTRY32 InMemoryOrderModuleList;
+    // +0x01c LIST_ENTRY32 InInitializationOrderModuleList;
+    // +0x024 WOW64_POINTER(PVOID) EntryInProgress;
+    // +0x028 BOOLEAN ShutdownInProgress;
+    // +0x030 WOW64_POINTER(HANDLE) ShutdownThreadId;
     // } PEB_LDR_DATA32, *PPEB_LDR_DATA32;
     // ````
     let in_load_order_module_list_offset = 0xc;
@@ -321,7 +293,17 @@ fn try_extract_wow64_user_modules(
         ))?;
 
     // From there, we walk the list!
-    try_read_module_map::<u32>(parser, Gva::new(module_list_entry_addr.into()))
+    let Some(modules32) =
+        try_read_module_map::<u32>(parser, Gva::new(module_list_entry_addr.into()))?
+    else {
+        return Ok(Some(modules));
+    };
+
+    // Merge the lists.
+    modules.extend(modules32);
+
+    // We're done!
+    Ok(Some(modules))
 }
 
 /// Filter out [`AddrTranslationError`] errors and turn them into `None`. This
@@ -444,15 +426,6 @@ impl KernelDumpParser {
         };
 
         parser.user_modules.extend(user_modules);
-
-        // Additionally, extract WoW64 user modules
-        let Some(wow64_user_modules) =
-            try_extract_wow64_user_modules(&mut parser, &kd_debugger_data_block, prcb_addr)?
-        else {
-            return Ok(parser);
-        };
-
-        parser.wow64_user_modules.extend(wow64_user_modules);
 
         Ok(parser)
     }
@@ -753,7 +726,7 @@ impl KernelDumpParser {
         unicode_str: &UnicodeString<P>,
     ) -> Result<Option<String>>
     where
-        P: Into<u64> + Copy,
+        P: PtrSize,
     {
         if (unicode_str.length % 2) != 0 {
             return Err(KdmpParserError::InvalidUnicodeString);
