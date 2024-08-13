@@ -38,8 +38,8 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
 }
 
-// This trait is was we use to be able to implement generic behavior for
-// 32/64-bit. We'll implement it for [`u32`] & [`u64`].
+/// This trait is used to implement generic behavior for both 32/64-bit.
+/// We'll implement it for both [`u32`] & [`u64`].
 trait PtrSize: Sized + Copy + Into<u64> + From<u32> {
     fn checked_add(self, rhs: Self) -> Option<Self>;
 }
@@ -298,7 +298,7 @@ fn try_extract_user_modules(
 
 /// Filter out [`AddrTranslationError`] errors and turn them into `None`. This
 /// makes it easier for caller code to write logic that can recover from a
-/// memory read failure by bailing out for example, and not bubbling up anls
+/// memory read failure by bailing out for example, and not bubbling up an
 /// error.
 fn filter_addr_translation_err<T>(res: Result<T>) -> Result<Option<T>> {
     match res {
