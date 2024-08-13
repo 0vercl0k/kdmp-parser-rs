@@ -243,7 +243,7 @@ fn try_extract_user_modules(
     // nt!_TEB32
     // +0x030 ProcessEnvironmentBlock : Uint4B
     // ```
-    let teb32_offset = 0x2000;
+    let teb32_offset = 0x2_000;
     let teb32_addr = teb_addr
         .checked_add(teb32_offset)
         .ok_or(KdmpParserError::Overflow("teb32 offset"))?;
@@ -271,19 +271,9 @@ fn try_extract_user_modules(
     };
 
     // ..and finally the `InLoadOrderModuleList`.
-    // https://github.com/winsiderss/phnt/blob/master/ntwow64.h
     // ```
-    // struct {
-    // +0x000 ULONG Length;
-    // +0x004 BOOLEAN Initialized;
-    // +0x008 WOW64_POINTER(HANDLE) SsHandle;
-    // +0x00c LIST_ENTRY32 InLoadOrderModuleList;
-    // +0x014 LIST_ENTRY32 InMemoryOrderModuleList;
-    // +0x01c LIST_ENTRY32 InInitializationOrderModuleList;
-    // +0x024 WOW64_POINTER(PVOID) EntryInProgress;
-    // +0x028 BOOLEAN ShutdownInProgress;
-    // +0x030 WOW64_POINTER(HANDLE) ShutdownThreadId;
-    // } PEB_LDR_DATA32, *PPEB_LDR_DATA32;
+    // 0:000> dt ntdll!_PEB_LDR_DATA InLoadOrderModuleList
+    // +0x00c InLoadOrderModuleList : _LIST_ENTRY
     // ````
     let in_load_order_module_list_offset = 0xc;
     let module_list_entry_addr = peb32_ldr_addr
