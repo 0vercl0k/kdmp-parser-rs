@@ -38,30 +38,51 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
 }
 
+// This trait is was we use to be able to implement generic behavior for
+// 32/64-bit. We'll implement it for [`u32`] & [`u64`].
+trait PtrSize: Sized + Copy + Into<u64> + From<u32> {
+    fn checked_add(self, rhs: Self) -> Option<Self>;
+}
+
+macro_rules! impl_checked_add {
+    ($($ty:ident),*) => {
+        $(impl PtrSize for $ty {
+            fn checked_add(self, rhs: $ty) -> Option<Self> {
+                $ty::checked_add(self, rhs)
+            }
+        })*
+    };
+}
+
+impl_checked_add!(u32, u64);
+
 /// Walk a LIST_ENTRY of LdrDataTableEntry. It is used to dump both the user &
 /// driver / module lists.
-fn try_read_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result<Option<ModuleMap>> {
+fn try_read_module_map<P>(parser: &mut KernelDumpParser, head: Gva) -> Result<Option<ModuleMap>>
+where
+    P: PtrSize,
+{
     let mut modules = ModuleMap::new();
-    let Some(entry) = parser.try_virt_read_struct::<ListEntry>(head)? else {
+    let Some(entry) = parser.try_virt_read_struct::<ListEntry<P>>(head)? else {
         return Ok(None);
     };
 
-    let mut entry_addr = entry.flink.into();
+    let mut entry_addr = Gva::new(entry.flink.into());
     // We'll walk it until we hit the starting point (it is circular).
     while entry_addr != head {
         // Read the table entry..
-        let Some(data) = parser.try_virt_read_struct::<LdrDataTableEntry>(entry_addr)? else {
+        let Some(data) = parser.try_virt_read_struct::<LdrDataTableEntry<P>>(entry_addr)? else {
             return Ok(None);
         };
 
         // ..and read it. We first try to read `full_dll_name` but will try
         // `base_dll_name` is we couldn't read the former.
         let Some(dll_name) = parser
-            .try_virt_read_unicode_string(&data.full_dll_name)
+            .try_virt_read_unicode_string::<P>(&data.full_dll_name)
             .and_then(|s| {
                 if s.is_none() {
                     // If we failed to read the `full_dll_name`, give `base_dll_name` a shot.
-                    parser.try_virt_read_unicode_string(&data.base_dll_name)
+                    parser.try_virt_read_unicode_string::<P>(&data.base_dll_name)
                 } else {
                     Ok(s)
                 }
@@ -75,12 +96,12 @@ fn try_read_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result<Optio
             .dll_base
             .checked_add(data.size_of_image.into())
             .ok_or_else(|| KdmpParserError::Overflow("module address"))?;
-        let at = data.dll_base.into()..dll_end_addr.into();
+        let at = Gva::new(data.dll_base.into())..Gva::new(dll_end_addr.into());
         let inserted = modules.insert(at, dll_name);
         debug_assert!(inserted.is_none());
 
         // Go to the next entry.
-        entry_addr = data.in_load_order_links.flink.into();
+        entry_addr = Gva::new(data.in_load_order_links.flink.into());
     }
 
     Ok(Some(modules))
@@ -89,7 +110,7 @@ fn try_read_module_map(parser: &mut KernelDumpParser, head: Gva) -> Result<Optio
 /// Extract the drivers / modules out of the `PsLoadedModuleList`.
 fn try_extract_kernel_modules(parser: &mut KernelDumpParser) -> Result<Option<ModuleMap>> {
     // Walk the LIST_ENTRY!
-    try_read_module_map(parser, parser.headers().ps_loaded_module_list.into())
+    try_read_module_map::<u64>(parser, parser.headers().ps_loaded_module_list.into())
 }
 
 /// Try to find the right `nt!_KPRCB` by walking them and finding one that has
@@ -209,12 +230,75 @@ fn try_extract_user_modules(
         ))?;
 
     // From there, we walk the list!
-    try_read_module_map(parser, module_list_entry_addr.into())
+    let Some(mut modules) = try_read_module_map::<u64>(parser, module_list_entry_addr.into())?
+    else {
+        return Ok(None);
+    };
+
+    // Now, it's time to dump the TEB32 if there's one.
+    //
+    // TEB32 is at offset 0x2000 from TEB and PEB32 is at +0x30:
+    // ```
+    // kd> dt nt!_TEB32 ProcessEnvironmentBlock
+    // nt!_TEB32
+    // +0x030 ProcessEnvironmentBlock : Uint4B
+    // ```
+    let teb32_offset = 0x2_000;
+    let teb32_addr = teb_addr
+        .checked_add(teb32_offset)
+        .ok_or(KdmpParserError::Overflow("teb32 offset"))?;
+    let peb32_offset = 0x30;
+    let peb32_addr = teb32_addr
+        .checked_add(peb32_offset)
+        .ok_or(KdmpParserError::Overflow("peb32 offset"))?;
+    let Some(peb32_addr) = parser.try_virt_read_struct::<u32>(peb32_addr.into())? else {
+        return Ok(Some(modules));
+    };
+
+    // ..then its _PEB_LDR_DATA.. (32-bit)
+    // ```
+    // kd> dt nt!_PEB32 Ldr
+    // +0x00c Ldr              : Uint4B
+    // ```
+    let ldr_offset = 0x0c;
+    let peb32_ldr_addr = peb32_addr
+        .checked_add(ldr_offset)
+        .ok_or(KdmpParserError::Overflow("ldr32 offset"))?;
+    let Some(peb32_ldr_addr) =
+        parser.try_virt_read_struct::<u32>(Gva::new(peb32_ldr_addr.into()))?
+    else {
+        return Ok(Some(modules));
+    };
+
+    // ..and finally the `InLoadOrderModuleList`.
+    // ```
+    // 0:000> dt ntdll!_PEB_LDR_DATA InLoadOrderModuleList
+    // +0x00c InLoadOrderModuleList : _LIST_ENTRY
+    // ````
+    let in_load_order_module_list_offset = 0xc;
+    let module_list_entry_addr = peb32_ldr_addr
+        .checked_add(in_load_order_module_list_offset)
+        .ok_or(KdmpParserError::Overflow(
+            "in load order module list offset",
+        ))?;
+
+    // From there, we walk the list!
+    let Some(modules32) =
+        try_read_module_map::<u32>(parser, Gva::new(module_list_entry_addr.into()))?
+    else {
+        return Ok(Some(modules));
+    };
+
+    // Merge the lists.
+    modules.extend(modules32);
+
+    // We're done!
+    Ok(Some(modules))
 }
 
 /// Filter out [`AddrTranslationError`] errors and turn them into `None`. This
 /// makes it easier for caller code to write logic that can recover from a
-/// memory read failure by bailing out for example, and not bubbling up an
+/// memory read failure by bailing out for example, and not bubbling up anls
 /// error.
 fn filter_addr_translation_err<T>(res: Result<T>) -> Result<Option<T>> {
     match res {
@@ -618,13 +702,19 @@ impl KernelDumpParser {
     }
 
     /// Try to read a `UNICODE_STRING`.
-    fn try_virt_read_unicode_string(&self, unicode_str: &UnicodeString) -> Result<Option<String>> {
+    fn try_virt_read_unicode_string<P>(
+        &self,
+        unicode_str: &UnicodeString<P>,
+    ) -> Result<Option<String>>
+    where
+        P: PtrSize,
+    {
         if (unicode_str.length % 2) != 0 {
             return Err(KdmpParserError::InvalidUnicodeString);
         }
 
         let mut buffer = vec![0; unicode_str.length.into()];
-        match self.virt_read_exact(unicode_str.buffer.into(), &mut buffer) {
+        match self.virt_read_exact(Gva::new(unicode_str.buffer.into()), &mut buffer) {
             Ok(_) => {}
             // If we encountered a memory translation error, we don't consider this a failure.
             Err(KdmpParserError::AddrTranslation(_)) => return Ok(None),

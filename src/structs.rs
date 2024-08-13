@@ -454,31 +454,30 @@ pub struct PfnRange {
 
 #[repr(C)]
 #[derive(Debug, Default)]
-pub struct ListEntry {
-    pub flink: u64,
-    pub blink: u64,
+pub struct ListEntry<P> {
+    pub flink: P,
+    pub blink: P,
 }
 
 #[repr(C)]
 #[derive(Debug, Default)]
-pub struct UnicodeString {
+pub struct UnicodeString<P> {
     pub length: u16,
     pub maximum_length: u16,
-    pub buffer: u64,
+    pub buffer: P,
 }
 
-#[repr(C)]
 #[derive(Debug, Default)]
-pub struct LdrDataTableEntry {
-    pub in_load_order_links: ListEntry,
-    pub in_memory_order_links: ListEntry,
-    pub in_initialization_order_links: ListEntry,
-    pub dll_base: u64,
-    pub entry_point: u64,
+#[repr(C)]
+pub struct LdrDataTableEntry<P> {
+    pub in_load_order_links: ListEntry<P>,
+    pub in_memory_order_links: ListEntry<P>,
+    pub in_initialization_order_links: ListEntry<P>,
+    pub dll_base: P,
+    pub entry_point: P,
     pub size_of_image: u32,
-    reserved1: u32,
-    pub full_dll_name: UnicodeString,
-    pub base_dll_name: UnicodeString,
+    pub full_dll_name: UnicodeString<P>,
+    pub base_dll_name: UnicodeString<P>,
 }
 
 // Copied from `WDBGEXTS.H`.
@@ -486,7 +485,7 @@ pub struct LdrDataTableEntry {
 #[derive(Debug, Default)]
 pub struct DbgKdDebugDataHeader64 {
     /// Link to other blocks
-    pub list: ListEntry,
+    pub list: ListEntry<u64>,
     /// This is a unique tag to identify the owner of the block.
     /// If your component only uses one pool tag, use it for this, too.
     pub owner_tag: u32,

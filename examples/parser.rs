@@ -1,5 +1,6 @@
 // Axel '0vercl0k' Souchet - February 25 2024
 use core::default::Default;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -97,7 +98,7 @@ fn main() -> Result<()> {
     .context("failed to parse the kernel dump")?;
 
     if args.dump_headers {
-        println!("{:?}", parser.headers());
+        println!("{:#?}", parser.headers());
     }
 
     if args.context_record {
@@ -109,8 +110,14 @@ fn main() -> Result<()> {
     }
 
     if args.modules {
-        for (at, module) in parser.user_modules().chain(parser.kernel_modules()) {
-            println!("{:#x}-{:#x}: {module}", at.start.u64(), at.end.u64());
+        let modules = parser
+            .user_modules()
+            .chain(parser.kernel_modules())
+            .map(|(at, v)| (at.start, (v, at.end)))
+            .collect::<BTreeMap<_, _>>();
+
+        for (start, (module, end)) in modules {
+            println!("{:#018x}-{:#018x}: {module}", start.u64(), end.u64());
         }
     }
 
