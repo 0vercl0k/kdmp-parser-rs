@@ -98,7 +98,7 @@ fn main() -> Result<()> {
     .context("failed to parse the kernel dump")?;
 
     if args.dump_headers {
-        println!("{:?}", parser.headers());
+        println!("{:#?}", parser.headers());
     }
 
     if args.context_record {

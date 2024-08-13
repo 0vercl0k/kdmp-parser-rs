@@ -91,6 +91,10 @@ fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
     seen.len() == modules.len()
 }
 
+// Extract the info with WinDbg w/ the below:
+// ```
+// dx -r2 @$curprocess.Modules.Select(p => new {start=p.BaseAddress, end=p.BaseAddress + p.Size, name=p.Name})
+// ```
 #[test]
 fn regressions() {
     let base_path =
@@ -337,6 +341,47 @@ fn regressions() {
         modules: &modules_4,
     };
 
+    let modules_5: Vec<M> =
+        serde_json::from_reader(File::open(test_dir.join("modules_5.json")).unwrap()).unwrap();
+    let modules_5 = modules_5
+        .into_iter()
+        .map(|m| m.into())
+        .collect::<Vec<Module>>();
+
+    let wow64 = TestcaseValues {
+        file: base_path.join("wow64_kernelactive.dmp"),
+        dump_type: kdmp_parser::DumpType::KernelAndUserMemory,
+        size: 0x03_ec_ff,
+        phys_addr: 0x06_23_50_00,
+        phys_bytes: [
+            0xcc, 0x33, 0xc0, 0xc3, 0x3b, 0x0d, 0x00, 0x50, 0x46, 0x00, 0x75, 0x01, 0xc3, 0xe9,
+            0x79, 0x02,
+        ],
+        virt_addr: 0x00451000,
+        virt_bytes: [
+            0xcc, 0x33, 0xc0, 0xc3, 0x3b, 0x0d, 0x00, 0x50, 0x46, 0x00, 0x75, 0x01, 0xc3, 0xe9,
+            0x79, 0x02,
+        ],
+        rax: 0x00465e58,
+        rbx: 0x0062d000,
+        rcx: 0x00000000,
+        rdx: 0x420e1d36,
+        rsi: 0x009ef4c0,
+        rdi: 0x009f0d30,
+        rip: 0x00451000,
+        rsp: 0x0056fbcc,
+        rbp: 0x0056fc10,
+        r8: 0x0000002b,
+        r9: 0x77cb2c0c,
+        r10: 0x00000000,
+        r11: 0x0038e450,
+        r12: 0x0062e000,
+        r13: 0x0038fda0,
+        r14: 0x0038ed40,
+        r15: 0x77c34660,
+        modules: &modules_5,
+    };
+
     let tests = [
         &bmp,
         &full,
@@ -344,6 +389,7 @@ fn regressions() {
         &kernel_user_dump,
         &complete_dump,
         &live_kernel,
+        &wow64,
     ];
 
     for test in tests {
