@@ -783,7 +783,6 @@ impl KernelDumpParser {
             ));
         }
 
-        debug_assert_eq!(bmp_header.pages % 8, 0);
         let bitmap_size = bmp_header.pages / 8;
         let mut page_offset = bmp_header.first_page;
         let mut physmem = PhysmemMap::new();
