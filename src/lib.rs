@@ -14,4 +14,4 @@ pub use gxa::{Gpa, Gva, Gxa};
 pub use map::{MappedFileReader, Reader};
 pub use parse::KernelDumpParser;
 pub use pxe::{Pfn, Pxe, PxeFlags};
-pub use structs::DumpType;
+pub use structs::{Context, DumpType, Header64};
