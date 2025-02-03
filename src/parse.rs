@@ -95,7 +95,7 @@ where
         let dll_end_addr = data
             .dll_base
             .checked_add(data.size_of_image.into())
-            .ok_or_else(|| KdmpParserError::Overflow("module address"))?;
+            .ok_or(KdmpParserError::Overflow("module address"))?;
         let at = Gva::new(data.dll_base.into())..Gva::new(dll_end_addr.into());
         let inserted = modules.insert(at, dll_name);
         debug_assert!(inserted.is_none());
@@ -129,7 +129,7 @@ fn try_find_prcb(
         // Calculate the address of where the CONTEXT pointer is at..
         let kprcb_context_addr = kprcb_addr
             .checked_add(kd_debugger_data_block.offset_prcb_context.into())
-            .ok_or_else(|| KdmpParserError::Overflow("offset_prcb"))?;
+            .ok_or(KdmpParserError::Overflow("offset_prcb"))?;
 
         // ..and read it.
         let Some(kprcb_context_addr) =
@@ -156,7 +156,7 @@ fn try_find_prcb(
         // Otherwise, let's move on to the next pointer.
         processor_block = processor_block
             .checked_add(mem::size_of::<u64>() as _)
-            .ok_or_else(|| KdmpParserError::Overflow("kprcb ptr"))?;
+            .ok_or(KdmpParserError::Overflow("kprcb ptr"))?;
     }
 
     Ok(None)
@@ -483,7 +483,7 @@ impl KernelDumpParser {
 
         offset
             .checked_add(gpa.offset())
-            .ok_or_else(|| KdmpParserError::Overflow("w/ gpa offset"))
+            .ok_or(KdmpParserError::Overflow("w/ gpa offset"))
     }
 
     /// Read physical memory starting at `gpa` into a `buffer`.
@@ -757,7 +757,7 @@ impl KernelDumpParser {
                 // Calculate the physical address.
                 let phys_addr = run
                     .phys_addr(page_idx)
-                    .ok_or_else(|| KdmpParserError::PhysAddrOverflow(run_idx, page_idx))?;
+                    .ok_or(KdmpParserError::PhysAddrOverflow(run_idx, page_idx))?;
 
                 // We now know where this page lives at, insert it into the physmem map.
                 if physmem.insert(phys_addr, page_offset).is_some() {
@@ -767,7 +767,7 @@ impl KernelDumpParser {
                 // Move the page offset along.
                 page_offset = page_offset
                     .checked_add(Page::size())
-                    .ok_or_else(|| KdmpParserError::PageOffsetOverflow(run_idx, page_idx))?;
+                    .ok_or(KdmpParserError::PageOffsetOverflow(run_idx, page_idx))?;
             }
         }
 
@@ -801,13 +801,13 @@ impl KernelDumpParser {
 
                 // Calculate where the page is.
                 let pa = gpa_from_bitmap(bitmap_idx, bit_idx)
-                    .ok_or_else(|| KdmpParserError::Overflow("pfn in bitmap"))?;
+                    .ok_or(KdmpParserError::Overflow("pfn in bitmap"))?;
 
                 let insert = physmem.insert(pa, page_offset);
                 debug_assert!(insert.is_none());
-                page_offset = page_offset.checked_add(Page::size()).ok_or_else(|| {
-                    KdmpParserError::BitmapPageOffsetOverflow(bitmap_idx, bit_idx)
-                })?;
+                page_offset = page_offset.checked_add(Page::size()).ok_or(
+                    KdmpParserError::BitmapPageOffsetOverflow(bitmap_idx, bit_idx),
+                )?;
             }
         }
 
@@ -889,17 +889,17 @@ impl KernelDumpParser {
 
             for page_idx in 0..pfn_range.number_of_pages {
                 let gpa = gpa_from_pfn_range(&pfn_range, page_idx)
-                    .ok_or_else(|| KdmpParserError::Overflow("w/ pfn_range"))?;
+                    .ok_or(KdmpParserError::Overflow("w/ pfn_range"))?;
                 let insert = physmem.insert(gpa, page_offset);
                 debug_assert!(insert.is_none());
                 page_offset = page_offset
                     .checked_add(Page::size())
-                    .ok_or_else(|| KdmpParserError::Overflow("w/ page_offset"))?;
+                    .ok_or(KdmpParserError::Overflow("w/ page_offset"))?;
             }
 
             page_count = page_count
                 .checked_add(pfn_range.number_of_pages)
-                .ok_or_else(|| KdmpParserError::Overflow("w/ page_count"))?;
+                .ok_or(KdmpParserError::Overflow("w/ page_count"))?;
         }
 
         Ok(physmem)

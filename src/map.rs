@@ -17,13 +17,13 @@ pub struct MappedFileReader<'map> {
     cursor: io::Cursor<&'map [u8]>,
 }
 
-impl<'map> Debug for MappedFileReader<'map> {
+impl Debug for MappedFileReader<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MappedFileReader").finish()
     }
 }
 
-impl<'map> MappedFileReader<'map> {
+impl MappedFileReader<'_> {
     /// Create a new [`MappedFileReader`] from a path using a memory map.
     pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
         // Open the file..
@@ -39,13 +39,13 @@ impl<'map> MappedFileReader<'map> {
     }
 }
 
-impl<'map> Read for MappedFileReader<'map> {
+impl Read for MappedFileReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.cursor.read(buf)
     }
 }
 
-impl<'map> Seek for MappedFileReader<'map> {
+impl Seek for MappedFileReader<'_> {
     fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
         self.cursor.seek(pos)
     }
@@ -53,7 +53,7 @@ impl<'map> Seek for MappedFileReader<'map> {
 
 /// Drop the [`MappedFileReader`]. In the case we memory mapped the file, we
 /// need to drop the mapping using OS-provided APIs.
-impl<'map> Drop for MappedFileReader<'map> {
+impl Drop for MappedFileReader<'_> {
     fn drop(&mut self) {
         unmap_memory_mapped_file(self.mapped_file).expect("failed to unmap")
     }
