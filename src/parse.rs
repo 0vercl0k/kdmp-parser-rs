@@ -783,6 +783,7 @@ impl KernelDumpParser {
             ));
         }
 
+        let remaining_bits = bmp_header.pages % 8;
         let bitmap_size = bmp_header.pages / 8;
         let mut page_offset = bmp_header.first_page;
         let mut physmem = PhysmemMap::new();
@@ -791,8 +792,16 @@ impl KernelDumpParser {
         for bitmap_idx in 0..bitmap_size {
             let mut byte = [0u8];
             reader.read_exact(&mut byte)?;
+            // ..if this is the last byte, then make sure to only read the remaining bits..
+            let last_byte = bitmap_idx == bitmap_size - 1;
+            if last_byte {
+                // ..by masking out the bits we don't care about.
+                let mask = (1u8 << remaining_bits).wrapping_sub(1);
+                byte[0] &= mask;
+            }
+
             let byte = byte[0];
-            // ..and walk every bits.
+            // Walk every bits.
             for bit_idx in 0..8 {
                 // If it's not set, go to the next.
                 if byte.bit(bit_idx) == 0 {
