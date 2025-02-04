@@ -784,7 +784,7 @@ impl KernelDumpParser {
         }
 
         let remaining_bits = bmp_header.pages % 8;
-        let bitmap_size = bmp_header.pages / 8;
+        let bitmap_size = bmp_header.pages.next_multiple_of(8) / 8;
         let mut page_offset = bmp_header.first_page;
         let mut physmem = PhysmemMap::new();
 
@@ -792,10 +792,10 @@ impl KernelDumpParser {
         for bitmap_idx in 0..bitmap_size {
             let mut byte = [0u8];
             reader.read_exact(&mut byte)?;
-            // ..if this is the last byte, then make sure to only read the remaining bits..
+            // ..if this is the last byte, and we have a few more bits to read..
             let last_byte = bitmap_idx == bitmap_size - 1;
-            if last_byte {
-                // ..by masking out the bits we don't care about.
+            if last_byte && remaining_bits != 0 {
+                // ..let's mask out the ones we don't care about.
                 let mask = (1u8 << remaining_bits).wrapping_sub(1);
                 byte[0] &= mask;
             }
@@ -811,6 +811,10 @@ impl KernelDumpParser {
                 // Calculate where the page is.
                 let pa = gpa_from_bitmap(bitmap_idx, bit_idx)
                     .ok_or(KdmpParserError::Overflow("pfn in bitmap"))?;
+
+                if last_byte {
+                    println!("pa: {pa:#x?}");
+                }
 
                 let insert = physmem.insert(pa, page_offset);
                 debug_assert!(insert.is_none());
