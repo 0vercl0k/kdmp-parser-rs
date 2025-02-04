@@ -812,10 +812,6 @@ impl KernelDumpParser {
                 let pa = gpa_from_bitmap(bitmap_idx, bit_idx)
                     .ok_or(KdmpParserError::Overflow("pfn in bitmap"))?;
 
-                if last_byte {
-                    println!("pa: {pa:#x?}");
-                }
-
                 let insert = physmem.insert(pa, page_offset);
                 debug_assert!(insert.is_none());
                 page_offset = page_offset.checked_add(Page::size()).ok_or(
