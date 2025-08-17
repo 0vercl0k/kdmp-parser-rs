@@ -204,7 +204,7 @@ mod unix {
     const MAP_SHARED: i32 = 1;
     const MAP_FAILED: *const u8 = usize::MAX as _;
 
-    extern "system" {
+    unsafe extern "system" {
         fn mmap(
             addr: *const u8,
             length: usize,
