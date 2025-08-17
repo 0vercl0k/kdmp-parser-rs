@@ -15,10 +15,10 @@ use crate::error::{PxeNotPresent, Result};
 use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
-    read_struct, BmpHeader64, Context, DumpType, ExceptionRecord64, FullRdmpHeader64, Header64,
-    KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange,
-    PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString, DUMP_HEADER64_EXPECTED_SIGNATURE,
-    DUMP_HEADER64_EXPECTED_VALID_DUMP,
+    BmpHeader64, Context, DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
+    DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, KdDebuggerData64, KernelRdmpHeader64,
+    LdrDataTableEntry, ListEntry, Page, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun,
+    UnicodeString, read_struct,
 };
 use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
@@ -556,8 +556,14 @@ impl KernelDumpParser {
 
     /// Translate a [`Gva`] into a [`Gpa`].
     pub fn virt_translate(&self, gva: Gva) -> Result<Gpa> {
+        self.virt_translate_with_dtb(gva, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Translate a [`Gva`] into a [`Gpa`] using a specific directory table base
+    /// / set of page tables.
+    pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<Gpa> {
         // Aligning in case PCID bits are set (bits 11:0)
-        let pml4_base = Gpa::from(self.headers.directory_table_base).page_align();
+        let pml4_base = dtb.page_align();
         let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
         let pml4e = Pxe::from(self.phys_read_struct::<u64>(pml4e_gpa)?);
         if !pml4e.present() {
@@ -610,6 +616,12 @@ impl KernelDumpParser {
 
     /// Read virtual memory starting at `gva` into a `buffer`.
     pub fn virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<usize> {
+        self.virt_read_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read virtual memory starting at `gva` into a `buffer` using a specific
+    /// directory table base / set of page tables.
+    pub fn virt_read_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<usize> {
         // Amount of bytes left to read.
         let mut amount_left = buf.len();
         // Total amount of bytes that we have successfully read.
@@ -627,7 +639,7 @@ impl KernelDumpParser {
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
             // Translate the gva into a gpa..
-            let gpa = self.virt_translate(addr)?;
+            let gpa = self.virt_translate_with_dtb(addr, dtb)?;
             // .. and read the physical memory!
             let amount_read = self.phys_read(gpa, slice)?;
             // Update the total amount of read bytes and how much work we have left.
@@ -646,17 +658,36 @@ impl KernelDumpParser {
         Ok(total_read)
     }
 
-    /// Try to read virtual memory starting at `gva` into a `buffer`.  If a
+    /// Try to read virtual memory starting at `gva` into a `buffer`. If a
     /// memory translation error occurs, it'll return `None` instead of an
     /// error.
     pub fn try_virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<usize>> {
         filter_addr_translation_err(self.virt_read(gva, buf))
     }
 
+    /// Try to read virtual memory starting at `gva` into a `buffer` using a
+    /// specific directory table base / set of page tables. If a
+    /// memory translation error occurs, it'll return `None` instead of an
+    /// error.
+    pub fn try_virt_read_with_dtb(
+        &self,
+        gva: Gva,
+        buf: &mut [u8],
+        dtb: Gpa,
+    ) -> Result<Option<usize>> {
+        filter_addr_translation_err(self.virt_read_with_dtb(gva, buf, dtb))
+    }
+
     /// Read an exact amount of virtual memory starting at `gva`.
     pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<()> {
+        self.virt_read_exact_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read an exact amount of virtual memory starting at `gva` using a
+    /// specific directory table base / set of page tables.
+    pub fn virt_read_exact_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<()> {
         // Read virtual memory.
-        let len = self.virt_read(gva, buf)?;
+        let len = self.virt_read_with_dtb(gva, buf, dtb)?;
 
         // If we read as many bytes as we wanted, then it's a win..
         if len == buf.len() {
@@ -672,25 +703,51 @@ impl KernelDumpParser {
     /// memory translation error occurs, it'll return `None` instead of an
     /// error.
     pub fn try_virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
-        filter_addr_translation_err(self.virt_read_exact(gva, buf))
+        self.try_virt_read_exact_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Try to read an exact amount of virtual memory starting at `gva` using a
+    /// specific directory table base / set of page tables. If a
+    /// memory translation error occurs, it'll return `None` instead of an
+    /// error.
+    pub fn try_virt_read_exact_with_dtb(
+        &self,
+        gva: Gva,
+        buf: &mut [u8],
+        dtb: Gpa,
+    ) -> Result<Option<()>> {
+        filter_addr_translation_err(self.virt_read_exact_with_dtb(gva, buf, dtb))
     }
 
     /// Read a `T` from virtual memory.
     pub fn virt_read_struct<T>(&self, gva: Gva) -> Result<T> {
+        self.virt_read_struct_with_dtb(gva, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read a `T` from virtual memory using a specific directory table base /
+    /// set of page tables.
+    pub fn virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<T> {
         let mut t = mem::MaybeUninit::uninit();
         let size_of_t = mem::size_of_val(&t);
         let slice_over_t =
             unsafe { slice::from_raw_parts_mut(t.as_mut_ptr() as *mut u8, size_of_t) };
 
-        self.virt_read_exact(gva, slice_over_t)?;
+        self.virt_read_exact_with_dtb(gva, slice_over_t, dtb)?;
 
         Ok(unsafe { t.assume_init() })
     }
 
-    /// Try to read a `T` from virtual memory. If a memory translation error
+    /// Try to read a `T` from virtual memory . If a memory translation error
     /// occurs, it'll return `None` instead of an error.
     pub fn try_virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
-        filter_addr_translation_err(self.virt_read_struct::<T>(gva))
+        self.try_virt_read_struct_with_dtb::<T>(gva, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Try to read a `T` from virtual memory using a specific directory table
+    /// base / set of page tables. If a memory translation error occurs, it'
+    /// ll return `None` instead of an error.
+    pub fn try_virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<Option<T>> {
+        filter_addr_translation_err(self.virt_read_struct_with_dtb::<T>(gva, dtb))
     }
 
     pub fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
@@ -709,12 +766,28 @@ impl KernelDumpParser {
     where
         P: PtrSize,
     {
+        self.try_virt_read_unicode_string_with_dtb(
+            unicode_str,
+            Gpa::new(self.headers.directory_table_base),
+        )
+    }
+
+    /// Try to read a `UNICODE_STRING` using a specific directory table base /
+    /// set of page tables.
+    fn try_virt_read_unicode_string_with_dtb<P>(
+        &self,
+        unicode_str: &UnicodeString<P>,
+        dtb: Gpa,
+    ) -> Result<Option<String>>
+    where
+        P: PtrSize,
+    {
         if (unicode_str.length % 2) != 0 {
             return Err(KdmpParserError::InvalidUnicodeString);
         }
 
         let mut buffer = vec![0; unicode_str.length.into()];
-        match self.virt_read_exact(Gva::new(unicode_str.buffer.into()), &mut buffer) {
+        match self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb) {
             Ok(_) => {}
             // If we encountered a memory translation error, we don't consider this a failure.
             Err(KdmpParserError::AddrTranslation(_)) => return Ok(None),
