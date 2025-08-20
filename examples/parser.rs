@@ -33,7 +33,7 @@ struct Args {
     exception_record: bool,
     /// Dump the first `len` bytes of every physical pages, unless an address is
     /// specified.
-    #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "0xffffffffffffffff")]
+    #[arg(short, long, num_args = 0..=1, default_missing_value = "0xffffffffffffffff")]
     mem: Option<String>,
     /// The address specified is interpreted as a virtual address, not a
     /// physical address.
@@ -42,6 +42,9 @@ struct Args {
     /// The number of bytes to dump out.
     #[arg(long, default_value_t = 0x10)]
     len: usize,
+    /// Directory table base address to use for virtual memory translations.
+    #[arg(long)]
+    dtb: Option<Gpa>,
     /// Reader mode.
     #[arg(short, long, value_enum, default_value_t = ReaderMode::Mmap)]
     reader: ReaderMode,
@@ -57,11 +60,19 @@ fn hexdump(address: u64, data: &[u8]) {
     for i in (0..len).step_by(16) {
         print!("{:016x}: ", address + (i as u64 * 16));
         let mut row = [None; 16];
-        for item in row.iter_mut() {
+        let mut row_it = row.iter_mut().enumerate().peekable();
+        while let Some((idx, item)) = row_it.next() {
             if let Some(c) = it.next() {
                 *item = Some(*c);
                 print!("{:02x}", c);
             } else {
+                *item = None;
+                print!("??");
+            }
+
+            if idx == 7 {
+                print!("-");
+            } else if row_it.peek().is_some() {
                 print!(" ");
             }
         }
@@ -71,7 +82,7 @@ fn hexdump(address: u64, data: &[u8]) {
                 let c = char::from(*c);
                 print!("{}", if c.is_ascii_graphic() { c } else { '.' });
             } else {
-                print!(" ");
+                print!("?");
             }
         }
         println!("|");
@@ -80,6 +91,8 @@ fn hexdump(address: u64, data: &[u8]) {
 
 /// Convert an hexadecimal string to a `u64`.
 fn to_hex(s: &str) -> Result<u64> {
+    let s = s.replace('`', "");
+
     u64::from_str_radix(s.trim_start_matches("0x"), 16).context("failed to convert string to u64")
 }
 
@@ -131,7 +144,12 @@ fn main() -> Result<()> {
             }
         } else {
             let amount = if args.virt {
-                parser.virt_read(Gva::new(addr), &mut buffer)
+                parser.virt_read_with_dtb(
+                    Gva::new(addr),
+                    &mut buffer,
+                    args.dtb
+                        .unwrap_or(Gpa::new(parser.headers().directory_table_base)),
+                )
             } else {
                 parser.phys_read(Gpa::new(addr), &mut buffer)
             };
@@ -140,7 +158,7 @@ fn main() -> Result<()> {
                 hexdump(addr, &buffer[..amount]);
             } else {
                 println!(
-                    "There is no {} memory available for {addr:#x}",
+                    "There is no {} memory available at {addr:#x}",
                     if args.virt { "virtual" } else { "physical" }
                 );
             }
