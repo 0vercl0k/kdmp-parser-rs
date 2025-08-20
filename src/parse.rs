@@ -638,8 +638,20 @@ impl KernelDumpParser {
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
-            // Translate the gva into a gpa..
-            let gpa = self.virt_translate_with_dtb(addr, dtb)?;
+            // Translate the gva into a gpa. But make sure to not early return if an error
+            // occured if we already have read some bytes..
+            let gpa = match self.virt_translate_with_dtb(addr, dtb) {
+                Ok(gpa) => gpa,
+                Err(e) => {
+                    if total_read > 0 {
+                        // If we already read some bytes, return how many we read.
+                        return Ok(total_read);
+                    }
+
+                    return Err(e);
+                }
+            };
+
             // .. and read the physical memory!
             let amount_read = self.phys_read(gpa, slice)?;
             // Update the total amount of read bytes and how much work we have left.

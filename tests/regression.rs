@@ -483,4 +483,36 @@ fn regressions() {
             AddrTranslationError::Phys(gpa)
         )) if gpa == 0x1bc4060.into()
     ));
+
+    // BUG: https://github.com/0vercl0k/kdmp-parser-rs/issues/10
+    // When reading the end of a virtual memory page that has no available
+    // memory behind, there was an issue in the virtual read algorithm. The
+    // first time the loop ran, it reads as much as it can and if the user
+    // wanted more, then the loop runs a second time to virt translate the next
+    // page. However, because there is nothing mapped the virtual to physical
+    // translation fails & bails (because of `?`) which suggests to the user
+    // that the read operation completely failed when it was in fact able to
+    // read some amount of bytes.
+    // ```text
+    // kd> db 00007ff7`ab766ff7
+    // 00007ff7`ab766ff7  00 00 00 00 00 00 00 00-00 ?? ?? ?? ?? ?? ?? ??  .........???????
+    // ...
+    // kdmp-parser-rs>cargo r --example parser -- mem.dmp --mem 00007ff7`ab766ff7 --virt --len 10
+    //     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+    //      Running `target\debug\examples\parser.exe mem.dmp --mem 00007ff7`ab766ff7 --virt --len 10`
+    // There is no virtual memory available at 0x7ff7ab766ff7
+    // ```
+    // ```text
+    // kd> db fffff803`f3086fef
+    // fffff803`f3086fef  9d f5 de ff 48 85 c0 74-0a 40 8a cf e8 80 ee ba  ....H..t.@......
+    // fffff803`f3086fff  ff ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  .???????????????
+    // fffff803`f308700f  ?? ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+    // ```
+    let mut buffer = [0; 32];
+    assert_eq!(
+        parser
+            .virt_read(0xfffff803f3086fef.into(), &mut buffer)
+            .unwrap(),
+        17
+    );
 }
