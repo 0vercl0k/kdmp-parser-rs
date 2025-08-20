@@ -515,4 +515,36 @@ fn regressions() {
             .unwrap(),
         17
     );
+
+    // ```text
+    // kd> !process 0 0
+    // PROCESS ffffc00c5120d580
+    //     SessionId: 1  Cid: 0d24    Peb: 3a8dcfb000  ParentCid: 02b4
+    //     DirBase: 0ea00002  ObjectTable: ffffd106e2336a80  HandleCount: 201.
+    //     Image: RuntimeBroker.exe
+    // kd> .process /p ffffc00c5120d580; !peb 3a8dcfb000
+    // kd> db 0x15cc6603908
+    // 0000015c`c6603908  43 00 3a 00 5c 00 57 00-69 00 6e 00 64 00 6f 00  C.:.\.W.i.n.d.o.
+    // 0000015c`c6603918  77 00 73 00 5c 00 53 00-79 00 73 00 74 00 65 00  w.s.\.S.y.s.t.e.
+    // 0000015c`c6603928  6d 00 33 00 32 00 5c 00-52 00 75 00 6e 00 74 00  m.3.2.\.R.u.n.t.
+    // 0000015c`c6603938  69 00 6d 00 65 00 42 00-72 00 6f 00 6b 00 65 00  i.m.e.B.r.o.k.e.
+    // ```
+    let parser = KernelDumpParser::new(&complete_dump.file).unwrap();
+    let mut buffer = [0; 64];
+    assert!(
+        parser
+            .virt_read_exact_with_dtb(0x15cc6603908.into(), &mut buffer, 0xea00002.into())
+            .is_ok()
+    );
+
+    assert_eq!(
+        buffer,
+        [
+            0x43, 0x00, 0x3a, 0x00, 0x5c, 0x00, 0x57, 0x00, 0x69, 0x00, 0x6e, 0x00, 0x64, 0x00,
+            0x6f, 0x00, 0x77, 0x00, 0x73, 0x00, 0x5c, 0x00, 0x53, 0x00, 0x79, 0x00, 0x73, 0x00,
+            0x74, 0x00, 0x65, 0x00, 0x6d, 0x00, 0x33, 0x00, 0x32, 0x00, 0x5c, 0x00, 0x52, 0x00,
+            0x75, 0x00, 0x6e, 0x00, 0x74, 0x00, 0x69, 0x00, 0x6d, 0x00, 0x65, 0x00, 0x42, 0x00,
+            0x72, 0x00, 0x6f, 0x00, 0x6b, 0x00, 0x65, 0x00
+        ]
+    );
 }
