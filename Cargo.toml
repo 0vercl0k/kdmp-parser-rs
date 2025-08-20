@@ -1,6 +1,6 @@
 [package]
 name = "kdmp-parser"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = ["Axel '0vercl0k' Souchet"]
 categories = ["parser-implementations"]
