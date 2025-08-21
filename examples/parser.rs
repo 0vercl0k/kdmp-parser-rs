@@ -1,5 +1,6 @@
 // Axel '0vercl0k' Souchet - February 25 2024
 use core::default::Default;
+use std::cmp::min;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
@@ -53,31 +54,61 @@ struct Args {
     modules: bool,
 }
 
-/// Print a hexdump of data that started at `address`.
-fn hexdump(address: u64, data: &[u8]) {
-    let len = data.len();
-    let mut it = data.iter();
-    for i in (0..len).step_by(16) {
+/// Print a hexdump of data that started at `address` (unmapped memory is
+/// displayed with `??`).
+fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
+    let mut row = [None; 16];
+    let mut data_it = data.iter();
+    for i in (0..wanted_len).step_by(16) {
+        // Calculate how many bytes we have left to print.
+        let wanted_left = wanted_len - i;
+        // Do we need a full row or less?
+        let left_to_display = min(wanted_left, 16);
         print!("{:016x}: ", address + (i as u64 * 16));
-        let mut row = [None; 16];
+
+        // Iterate over the row now and populate it with the data. We do this because
+        // the output first displays the hexadecimal value of every bytes, and then its
+        // ASCII representation.
         let mut row_it = row.iter_mut().enumerate().peekable();
         while let Some((idx, item)) = row_it.next() {
-            if let Some(c) = it.next() {
-                *item = Some(*c);
-                print!("{:02x}", c);
-            } else {
-                *item = None;
-                print!("??");
-            }
+            // Drain the data iterator byte by byte and fill the row with the data.
+            match data_it.next() {
+                Some(c) => {
+                    // If we have a byte, then easy peasy.
+                    *item = Some(*c);
+                    print!("{:02x}", c);
+                }
+                None => {
+                    *item = None;
+                    // If we don't have a byte, then we need to figure out what to do. There are two
+                    // cases to take care of:
+                    let displayed_amount = i + idx;
+                    if displayed_amount >= wanted_len {
+                        // - either what is left to display is not a full row, in which case we need
+                        //   to display spaces to padd the output such that the upcoming ASCII
+                        //   representation stays aligned.
+                        print!("  ");
+                    } else {
+                        // - either the user asked a larger length than what is mapped in memory, in
+                        //   which case we need to display `??` for those bytes.
+                        print!("??");
+                    }
+                }
+            };
 
-            if idx == 7 {
+            // We separate half of the row with a dash. But we only want to display it if
+            // there'll be at least one byte after it (so at least 9 bytes to display in
+            // this row; otherwise it'd be surrounded by spaces which looks odd).
+            if left_to_display >= 9 && idx == 7 {
                 print!("-");
             } else if row_it.peek().is_some() {
                 print!(" ");
             }
         }
-        print!(" |");
-        for item in &row {
+
+        // Now print the ASCII representation of the row (full or smaller).
+        print!("  ");
+        for item in &row[..left_to_display] {
             if let Some(c) = item {
                 let c = char::from(*c);
                 print!("{}", if c.is_ascii_graphic() { c } else { '.' });
@@ -85,7 +116,7 @@ fn hexdump(address: u64, data: &[u8]) {
                 print!("?");
             }
         }
-        println!("|");
+        println!()
     }
 }
 
@@ -140,7 +171,7 @@ fn main() -> Result<()> {
         if addr == u64::MAX {
             for (gpa, _) in parser.physmem() {
                 parser.phys_read_exact(gpa, &mut buffer)?;
-                hexdump(gpa.u64(), &buffer)
+                hexdump(gpa.u64(), &buffer, args.len)
             }
         } else {
             let amount = if args.virt {
@@ -155,7 +186,7 @@ fn main() -> Result<()> {
             };
 
             if let Ok(amount) = amount {
-                hexdump(addr, &buffer[..amount]);
+                hexdump(addr, &buffer[..amount], args.len);
             } else {
                 println!(
                     "There is no {} memory available at {addr:#x}",
