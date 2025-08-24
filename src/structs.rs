@@ -17,6 +17,25 @@ impl Page {
     }
 }
 
+/// A large page.
+pub struct LargePage;
+
+impl LargePage {
+    /// Get the size of a large memory page.
+    pub const fn size() -> u64 {
+        2 * 1_024 * 1_024
+    }
+}
+
+pub struct HugePage;
+
+impl HugePage {
+    /// Get the size of a huge memory page.
+    pub const fn size() -> u64 {
+        1_024 * 1_024 * 1_024
+    }
+}
+
 /// Types of kernel crash dump.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u32)]

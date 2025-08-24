@@ -41,7 +41,7 @@ struct Args {
     #[arg(long, default_value_t = false)]
     virt: bool,
     /// The number of bytes to dump out.
-    #[arg(long, default_value_t = 0x10)]
+    #[arg(long, default_value_t = 128)]
     len: usize,
     /// Directory table base address to use for virtual memory translations.
     #[arg(long)]
@@ -57,6 +57,7 @@ struct Args {
 /// Print a hexdump of data that started at `address` (unmapped memory is
 /// displayed with `??`).
 fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
+    assert!(wanted_len >= data.len());
     let mut row = [None; 16];
     let mut data_it = data.iter();
     for i in (0..wanted_len).step_by(16) {

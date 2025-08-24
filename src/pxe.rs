@@ -171,6 +171,22 @@ impl Pxe {
     pub fn transition(&self) -> bool {
         !self.present() && self.flags.contains(PxeFlags::Transition)
     }
+
+    pub fn readable(&self) -> bool {
+        self.present()
+    }
+
+    pub fn writable(&self) -> bool {
+        self.flags.contains(PxeFlags::Writable)
+    }
+
+    pub fn executable(&self) -> bool {
+        !self.flags.contains(PxeFlags::NoExecute)
+    }
+
+    pub fn user_accessible(&self) -> bool {
+        self.flags.contains(PxeFlags::UserAccessible)
+    }
 }
 
 /// Convert a [`u64`] into a [`Pxe`].

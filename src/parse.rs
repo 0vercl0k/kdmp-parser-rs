@@ -16,11 +16,81 @@ use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
     BmpHeader64, Context, DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
-    DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, KdDebuggerData64, KernelRdmpHeader64,
-    LdrDataTableEntry, ListEntry, Page, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun,
-    UnicodeString, read_struct,
+    DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, HugePage, KdDebuggerData64,
+    KernelRdmpHeader64, LargePage, LdrDataTableEntry, ListEntry, Page, PfnRange, PhysmemDesc,
+    PhysmemMap, PhysmemRun, UnicodeString, read_struct,
 };
 use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
+
+/// The kind of physical page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageKind {
+    /// A normal 4kb page.
+    Normal,
+    /// A large 2mb page.
+    Large,
+    /// A huge 1gb page.
+    Huge,
+}
+
+impl PageKind {
+    /// Size in bytes of the page.
+    pub fn size(&self) -> u64 {
+        match self {
+            Self::Normal => Page::size(),
+            Self::Large => LargePage::size(),
+            Self::Huge => HugePage::size(),
+        }
+    }
+
+    pub fn page_offset_of(&self, addr: u64) -> u64 {
+        let mask = self.size() - 1;
+
+        addr & mask
+    }
+}
+
+/// The details related to a virtual to physical address translation.
+#[derive(Debug)]
+pub struct TranslationDetails {
+    /// The physical address backing the virtual address that was requested.
+    pub pfn: Pfn,
+    /// The base physical address of the page.
+    pub offset: u64,
+    /// The kind of physical page.
+    pub page_kind: PageKind,
+    /// Is the page readable?
+    pub readable: bool,
+    /// Is the page writable?
+    pub writable: bool,
+    /// Is the page executable?
+    pub executable: bool,
+    /// Is the page user accessible?
+    pub user_accessible: bool,
+}
+
+impl TranslationDetails {
+    pub fn new(pfn: Pfn, offset: u64, page_kind: PageKind, pxes: &[Pxe]) -> Self {
+        let readable = pxes.iter().all(Pxe::readable);
+        let writable = pxes.iter().all(Pxe::writable);
+        let executable = pxes.iter().all(Pxe::executable);
+        let user_accessible = pxes.iter().all(Pxe::user_accessible);
+
+        Self {
+            pfn,
+            offset,
+            page_kind,
+            readable,
+            writable,
+            executable,
+            user_accessible,
+        }
+    }
+
+    pub fn gpa(&self) -> Gpa {
+        self.pfn.gpa_with_offset(self.offset)
+    }
+}
 
 fn gpa_from_bitmap(bitmap_idx: u64, bit_idx: usize) -> Option<Gpa> {
     let pfn = Pfn::new(
@@ -39,7 +109,7 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
 }
 
 /// This trait is used to implement generic behavior for both 32/64-bit.
-/// We'll implement it for both [`u32`] & [`u64`].
+/// It is implemented for both [`u32`] & [`u64`].
 trait PtrSize: Sized + Copy + Into<u64> + From<u32> {
     fn checked_add(self, rhs: Self) -> Option<Self>;
 }
@@ -555,13 +625,13 @@ impl KernelDumpParser {
     }
 
     /// Translate a [`Gva`] into a [`Gpa`].
-    pub fn virt_translate(&self, gva: Gva) -> Result<Gpa> {
+    pub fn virt_translate(&self, gva: Gva) -> Result<TranslationDetails> {
         self.virt_translate_with_dtb(gva, Gpa::new(self.headers.directory_table_base))
     }
 
     /// Translate a [`Gva`] into a [`Gpa`] using a specific directory table base
     /// / set of page tables.
-    pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<Gpa> {
+    pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<TranslationDetails> {
         // Aligning in case PCID bits are set (bits 11:0)
         let pml4_base = dtb.page_align();
         let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
@@ -582,7 +652,11 @@ impl KernelDumpParser {
         // directory; see Table 4-1
         let pd_base = pdpte.pfn.gpa();
         if pdpte.large_page() {
-            return Ok(Gpa::new(pd_base.u64() + (gva.u64() & 0x3fff_ffff)));
+            let page_kind = PageKind::Huge;
+            let offset = page_kind.page_offset_of(gva.u64());
+            return Ok(TranslationDetails::new(pdpte.pfn, offset, page_kind, &[
+                pml4e, pdpte,
+            ]));
         }
 
         let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
@@ -596,7 +670,14 @@ impl KernelDumpParser {
         // table; see Table 4-18
         let pt_base = pde.pfn.gpa();
         if pde.large_page() {
-            return Ok(Gpa::new(pt_base.u64() + (gva.u64() & 0x1f_ffff)));
+            let page_kind = PageKind::Large;
+            let offset = page_kind.page_offset_of(gva.u64());
+            return Ok(TranslationDetails::new(
+                pde.pfn,
+                offset,
+                PageKind::Large,
+                &[pml4e, pdpte, pde],
+            ));
         }
 
         let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
@@ -609,9 +690,12 @@ impl KernelDumpParser {
             }
         }
 
-        let page_base = pte.pfn.gpa();
+        let page_kind = PageKind::Normal;
+        let offset = page_kind.page_offset_of(gva.u64());
 
-        Ok(Gpa::new(page_base.u64() + gva.offset()))
+        Ok(TranslationDetails::new(pte.pfn, offset, page_kind, &[
+            pml4e, pdpte, pde, pte,
+        ]))
     }
 
     /// Read virtual memory starting at `gva` into a `buffer`.
@@ -630,18 +714,10 @@ impl KernelDumpParser {
         let mut addr = gva;
         // Let's try to read as much as the user wants.
         while amount_left > 0 {
-            // We need to take care of reads that straddle different virtual memory pages.
-            // So let's figure out the maximum amount of bytes we can read off this page.
-            // Either, we read it until its end, or we stop if the user wants us to read
-            // less.
-            let left_in_page = (Page::size() - addr.offset()) as usize;
-            let amount_wanted = min(amount_left, left_in_page);
-            // Figure out where we should read into.
-            let slice = &mut buf[total_read..total_read + amount_wanted];
             // Translate the gva into a gpa. But make sure to not early return if an error
-            // occured if we already have read some bytes..
-            let gpa = match self.virt_translate_with_dtb(addr, dtb) {
-                Ok(gpa) => gpa,
+            // occured if we already have read some bytes.
+            let translation = match self.virt_translate_with_dtb(addr, dtb) {
+                Ok(tr) => tr,
                 Err(e) => {
                     if total_read > 0 {
                         // If we already read some bytes, return how many we read.
@@ -652,8 +728,17 @@ impl KernelDumpParser {
                 }
             };
 
-            // .. and read the physical memory!
-            let amount_read = self.phys_read(gpa, slice)?;
+            // We need to take care of reads that straddle different virtual memory pages.
+            // First, figure out the maximum amount of bytes we can read off this page.
+            let left_in_page = (translation.page_kind.size() - translation.offset) as usize;
+            // Then, either we read it until its end, or we stop before if we can get by
+            // with less.
+            let amount_wanted = min(amount_left, left_in_page);
+            // Figure out where we should read into.
+            let slice = &mut buf[total_read..total_read + amount_wanted];
+
+            // Read the physical memory!
+            let amount_read = self.phys_read(translation.gpa(), slice)?;
             // Update the total amount of read bytes and how much work we have left.
             total_read += amount_read;
             amount_left -= amount_read;

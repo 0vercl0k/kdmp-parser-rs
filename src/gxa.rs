@@ -39,7 +39,7 @@ pub trait Gxa: Sized + Default + Copy + From<u64> {
 
     /// Page-align it.
     fn page_align(&self) -> Self {
-        Self::from(self.u64() & !0xfff)
+        Self::from(self.u64() & !0xf_ff)
     }
 
     /// Get the next aligned page.
