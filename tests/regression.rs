@@ -574,4 +574,31 @@ fn regressions() {
         0x70, 0x72, 0x05, 0x00, 0x04, 0x3a, 0x65, 0x00, 0x54, 0x3a, 0x65, 0x00, 0xbc, 0x82, 0x0c,
         0x00
     ]);
+
+    // Read from two straddling large pages.
+    // ```text
+    // 32.1: kd> !pte fffff80122a00000 - 10
+    //                                            VA fffff801229ffff0
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A0    PTE at FFFFF5FC00914FF8
+    // contains 0000000002709063  contains 000000000270A063  contains 8A000000048001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 49ff
+    //
+    // 32.1: kd> !pte fffff80122a00000
+    //                                            VA fffff80122a00000
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A8    PTE at FFFFF5FC00915000
+    // contains 0000000002709063  contains 000000000270A063  contains 0A00000004A001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4a00      -GL-A--KREV  LARGE PAGE pfn 4a00
+    // 32.1: kd> db fffff80122a00000 - 10
+    // 002b:fffff801`229ffff0  65 00 5c 00 4d 00 69 00-63 00 72 00 6f 00 73 00  e.\.M.i.c.r.o.s.
+    // ```
+    let mut buffer = [0; 0x10];
+    assert!(
+        parser
+            .virt_read_exact(Gva::new(0xfffff80122a00000 - 10), &mut buffer)
+            .is_ok()
+    );
+    assert_eq!(buffer, [
+        0x65, 0x00, 0x5c, 0x00, 0x4d, 0x00, 0x69, 0x00, 0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73,
+        0x00
+    ]);
 }
