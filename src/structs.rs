@@ -7,32 +7,32 @@ use std::{io, mem, slice};
 use crate::error::Result;
 use crate::{Gpa, KdmpParserError, Reader};
 
-/// A page.
-pub struct Page;
-
-impl Page {
-    /// Get the size of a memory page.
-    pub const fn size() -> u64 {
-        0x1_000
-    }
+/// The different kind of physical pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageKind {
+    /// A normal 4kb page.
+    Normal,
+    /// A large 2mb page.
+    Large,
+    /// A huge 1gb page.
+    Huge,
 }
 
-/// A large page.
-pub struct LargePage;
-
-impl LargePage {
-    /// Get the size of a large memory page.
-    pub const fn size() -> u64 {
-        2 * 1_024 * 1_024
+impl PageKind {
+    /// Size in bytes of the page.
+    pub fn size(&self) -> u64 {
+        match self {
+            Self::Normal => 4 * 1_024,
+            Self::Large => 2 * 1_024 * 1_024,
+            Self::Huge => 1_024 * 1_024 * 1_024,
+        }
     }
-}
 
-pub struct HugePage;
+    /// Extract the page offset of `addr`.
+    pub fn page_offset(&self, addr: u64) -> u64 {
+        let mask = self.size() - 1;
 
-impl HugePage {
-    /// Get the size of a huge memory page.
-    pub const fn size() -> u64 {
-        1_024 * 1_024 * 1_024
+        addr & mask
     }
 }
 
@@ -213,13 +213,13 @@ pub struct PhysmemRun {
 impl PhysmemRun {
     /// Calculate a physical address from a run and an index.
     ///
-    /// The formulae is: (`base_page` + `page_idx`) * `Page::size()`.
+    /// The formulae is: (`base_page` + `page_idx`) * `PageKind::Normal.size()`.
     pub fn phys_addr(&self, page_idx: u64) -> Option<Gpa> {
         debug_assert!(page_idx < self.page_count);
 
         self.base_page
             .checked_add(page_idx)?
-            .checked_mul(Page::size())
+            .checked_mul(PageKind::Normal.size())
             .map(Gpa::new)
     }
 }

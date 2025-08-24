@@ -19,7 +19,7 @@ use std::ops::AddAssign;
 use std::str::FromStr;
 
 use crate::pxe::Pfn;
-use crate::structs::Page;
+use crate::structs::PageKind;
 
 /// A bunch of useful methods to manipulate 64-bit addresses of
 /// any kind.
@@ -47,7 +47,7 @@ pub trait Gxa: Sized + Default + Copy + From<u64> {
         Self::from(
             self.page_align()
                 .u64()
-                .checked_add(Page::size())
+                .checked_add(PageKind::Normal.size())
                 .expect("Cannot overflow"),
         )
     }

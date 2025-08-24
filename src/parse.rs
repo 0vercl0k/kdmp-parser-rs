@@ -16,39 +16,11 @@ use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
     BmpHeader64, Context, DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
-    DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, HugePage, KdDebuggerData64,
-    KernelRdmpHeader64, LargePage, LdrDataTableEntry, ListEntry, Page, PfnRange, PhysmemDesc,
-    PhysmemMap, PhysmemRun, UnicodeString, read_struct,
+    DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, KdDebuggerData64, KernelRdmpHeader64,
+    LdrDataTableEntry, ListEntry, PageKind, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun,
+    UnicodeString, read_struct,
 };
 use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
-
-/// The kind of physical page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PageKind {
-    /// A normal 4kb page.
-    Normal,
-    /// A large 2mb page.
-    Large,
-    /// A huge 1gb page.
-    Huge,
-}
-
-impl PageKind {
-    /// Size in bytes of the page.
-    pub fn size(&self) -> u64 {
-        match self {
-            Self::Normal => Page::size(),
-            Self::Large => LargePage::size(),
-            Self::Huge => HugePage::size(),
-        }
-    }
-
-    pub fn page_offset_of(&self, addr: u64) -> u64 {
-        let mask = self.size() - 1;
-
-        addr & mask
-    }
-}
 
 /// The details related to a virtual to physical address translation.
 #[derive(Debug)]
@@ -71,7 +43,7 @@ pub struct TranslationDetails {
 
 impl TranslationDetails {
     pub fn new(pfn: Pfn, offset: u64, page_kind: PageKind, pxes: &[Pxe]) -> Self {
-        let readable = pxes.iter().all(Pxe::readable);
+        let readable = pxes.iter().all(Pxe::present);
         let writable = pxes.iter().all(Pxe::writable);
         let executable = pxes.iter().all(Pxe::executable);
         let user_accessible = pxes.iter().all(Pxe::user_accessible);
@@ -103,7 +75,7 @@ fn gpa_from_bitmap(bitmap_idx: u64, bit_idx: usize) -> Option<Gpa> {
 }
 
 fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
-    let offset = page_idx.checked_mul(Page::size())?;
+    let offset = page_idx.checked_mul(PageKind::Normal.size())?;
 
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
 }
@@ -574,7 +546,7 @@ impl KernelDumpParser {
             // So let's figure out the maximum amount of bytes we can read off this page.
             // Either, we read it until its end, or we stop if the user wants us to read
             // less.
-            let left_in_page = (Page::size() - gpa.offset()) as usize;
+            let left_in_page = (PageKind::Normal.size() - gpa.offset()) as usize;
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
@@ -653,7 +625,7 @@ impl KernelDumpParser {
         let pd_base = pdpte.pfn.gpa();
         if pdpte.large_page() {
             let page_kind = PageKind::Huge;
-            let offset = page_kind.page_offset_of(gva.u64());
+            let offset = page_kind.page_offset(gva.u64());
             return Ok(TranslationDetails::new(pdpte.pfn, offset, page_kind, &[
                 pml4e, pdpte,
             ]));
@@ -671,7 +643,7 @@ impl KernelDumpParser {
         let pt_base = pde.pfn.gpa();
         if pde.large_page() {
             let page_kind = PageKind::Large;
-            let offset = page_kind.page_offset_of(gva.u64());
+            let offset = page_kind.page_offset(gva.u64());
             return Ok(TranslationDetails::new(
                 pde.pfn,
                 offset,
@@ -691,7 +663,7 @@ impl KernelDumpParser {
         }
 
         let page_kind = PageKind::Normal;
-        let offset = page_kind.page_offset_of(gva.u64());
+        let offset = page_kind.page_offset(gva.u64());
 
         Ok(TranslationDetails::new(pte.pfn, offset, page_kind, &[
             pml4e, pdpte, pde, pte,
@@ -936,7 +908,7 @@ impl KernelDumpParser {
 
                 // Move the page offset along.
                 page_offset = page_offset
-                    .checked_add(Page::size())
+                    .checked_add(PageKind::Normal.size())
                     .ok_or(KdmpParserError::PageOffsetOverflow(run_idx, page_idx))?;
             }
         }
@@ -984,7 +956,7 @@ impl KernelDumpParser {
 
                 let insert = physmem.insert(pa, page_offset);
                 debug_assert!(insert.is_none());
-                page_offset = page_offset.checked_add(Page::size()).ok_or(
+                page_offset = page_offset.checked_add(PageKind::Normal.size()).ok_or(
                     KdmpParserError::BitmapPageOffsetOverflow(bitmap_idx, bit_idx),
                 )?;
             }
@@ -1072,7 +1044,7 @@ impl KernelDumpParser {
                 let insert = physmem.insert(gpa, page_offset);
                 debug_assert!(insert.is_none());
                 page_offset = page_offset
-                    .checked_add(Page::size())
+                    .checked_add(PageKind::Normal.size())
                     .ok_or(KdmpParserError::Overflow("w/ page_offset"))?;
             }
 

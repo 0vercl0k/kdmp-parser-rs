@@ -5,7 +5,7 @@ use std::fs::File;
 use std::ops::Range;
 use std::path::PathBuf;
 
-use kdmp_parser::{AddrTranslationError, Gpa, Gva, KdmpParserError, KernelDumpParser};
+use kdmp_parser::{AddrTranslationError, Gpa, Gva, KdmpParserError, KernelDumpParser, PageKind};
 use serde::Deserialize;
 
 /// Convert an hexadecimal encoded integer string into a `u64`.
@@ -543,5 +543,30 @@ fn regressions() {
         0x65, 0x00, 0x6d, 0x00, 0x33, 0x00, 0x32, 0x00, 0x5c, 0x00, 0x52, 0x00, 0x75, 0x00, 0x6e,
         0x00, 0x74, 0x00, 0x69, 0x00, 0x6d, 0x00, 0x65, 0x00, 0x42, 0x00, 0x72, 0x00, 0x6f, 0x00,
         0x6b, 0x00, 0x65, 0x00
+    ]);
+
+    // Read from the middle of a large page.
+    // ```text
+    // 32.1: kd> !pte nt
+    //                                            VA fffff80122800000
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A0    PTE at FFFFF5FC00914000
+    // contains 0000000002709063  contains 000000000270A063  contains 8A000000048001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 4800
+    // ```
+    let parser = KernelDumpParser::new(&wow64.file).unwrap();
+    let tr = parser
+        .virt_translate_with_dtb(0xfffff80122800000.into(), 0x5dc6f000.into())
+        .unwrap();
+    assert!(matches!(tr.page_kind, PageKind::Large));
+    assert!(matches!(tr.pfn.u64(), 0x4800));
+    let mut buffer = [0; 0x10];
+    assert!(
+        parser
+            .virt_read_exact(Gva::new(0xfffff80122800000 + 0x100000), &mut buffer)
+            .is_ok()
+    );
+    assert_eq!(buffer, [
+        0x54, 0x3a, 0x65, 0x00, 0xbc, 0x82, 0x0c, 0x00, 0x5c, 0x3a, 0x65, 0x00, 0x86, 0x3b, 0x65,
+        0x00
     ]);
 }
