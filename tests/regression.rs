@@ -447,6 +447,7 @@ fn regressions() {
     ];
     assert!(parser.virt_read(0x1a42ea30240.into(), &mut buffer).is_ok());
     assert_eq!(buffer, expected_buffer);
+
     // Example of a valid PTE that don't have a physical page backing it (in
     // kerneldump.dmp):
     // ```
@@ -560,13 +561,17 @@ fn regressions() {
     assert!(matches!(tr.page_kind, PageKind::Large));
     assert!(matches!(tr.pfn.u64(), 0x4800));
     let mut buffer = [0; 0x10];
+    // ```text
+    // 32.1: kd> db 0xfffff80122800000 + 0x100000 - 8
+    // 002b:fffff801`228ffff8  70 72 05 00 04 3a 65 00-54 3a 65 00 bc 82 0c 00  pr...:e.T:e.....
+    // ```
     assert!(
         parser
-            .virt_read_exact(Gva::new(0xfffff80122800000 + 0x100000), &mut buffer)
+            .virt_read_exact(Gva::new(0xfffff80122800000 + 0x100000 - 8), &mut buffer)
             .is_ok()
     );
     assert_eq!(buffer, [
-        0x54, 0x3a, 0x65, 0x00, 0xbc, 0x82, 0x0c, 0x00, 0x5c, 0x3a, 0x65, 0x00, 0x86, 0x3b, 0x65,
+        0x70, 0x72, 0x05, 0x00, 0x04, 0x3a, 0x65, 0x00, 0x54, 0x3a, 0x65, 0x00, 0xbc, 0x82, 0x0c,
         0x00
     ]);
 }
