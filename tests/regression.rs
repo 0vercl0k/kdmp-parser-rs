@@ -10,9 +10,7 @@ use serde::Deserialize;
 
 /// Convert an hexadecimal encoded integer string into a `u64`.
 pub fn hex_str(s: &str) -> u64 {
-    let prefix = s.strip_prefix("0x");
-
-    u64::from_str_radix(prefix.unwrap_or(s), 16).unwrap()
+    u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap()
 }
 
 #[derive(Debug, Deserialize)]
@@ -555,9 +553,7 @@ fn regressions() {
     // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 4800
     // ```
     let parser = KernelDumpParser::new(&wow64.file).unwrap();
-    let tr = parser
-        .virt_translate_with_dtb(0xfffff80122800000.into(), 0x5dc6f000.into())
-        .unwrap();
+    let tr = parser.virt_translate(0xfffff80122800000.into()).unwrap();
     assert!(matches!(tr.page_kind, PageKind::Large));
     assert!(matches!(tr.pfn.u64(), 0x4800));
     let mut buffer = [0; 0x10];
@@ -577,28 +573,28 @@ fn regressions() {
 
     // Read from two straddling large pages.
     // ```text
-    // 32.1: kd> !pte fffff80122a00000 - 10
-    //                                            VA fffff801229ffff0
+    // 32.1: kd> !pte 0xfffff80122800000 + 0x200000 - 0x8
+    //                                            VA fffff801229ffff8
     // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A0    PTE at FFFFF5FC00914FF8
     // contains 0000000002709063  contains 000000000270A063  contains 8A000000048001A1  contains 0000000000000000
     // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 49ff
     //
-    // 32.1: kd> !pte fffff80122a00000
+    // 32.1: kd> !pte 0xfffff80122800000 + 0x200000
     //                                            VA fffff80122a00000
     // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A8    PTE at FFFFF5FC00915000
     // contains 0000000002709063  contains 000000000270A063  contains 0A00000004A001A1  contains 0000000000000000
     // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4a00      -GL-A--KREV  LARGE PAGE pfn 4a00
-    // 32.1: kd> db fffff80122a00000 - 10
-    // 002b:fffff801`229ffff0  65 00 5c 00 4d 00 69 00-63 00 72 00 6f 00 73 00  e.\.M.i.c.r.o.s.
+    // 32.1: kd> db 0xfffff80122800000 + 0x200000 - 0x8
+    // 002b:fffff801`229ffff8  63 00 72 00 6f 00 73 00-cc cc cc cc cc cc cc cc  c.r.o.s.........
     // ```
     let mut buffer = [0; 0x10];
     assert!(
         parser
-            .virt_read_exact(Gva::new(0xfffff80122a00000 - 10), &mut buffer)
+            .virt_read_exact(Gva::new(0xfffff80122800000 + 0x200000 - 0x8), &mut buffer)
             .is_ok()
     );
     assert_eq!(buffer, [
-        0x65, 0x00, 0x5c, 0x00, 0x4d, 0x00, 0x69, 0x00, 0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73,
-        0x00
+        0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+        0xcc
     ]);
 }
