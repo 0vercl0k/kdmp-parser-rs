@@ -597,4 +597,43 @@ fn regressions() {
         0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
         0xcc
     ]);
+
+    // ```text
+    // 32.1: kd> !pte 0x56fbcc
+    //                                            VA 000000000056fbcc
+    // PXE at FFFFF5FAFD7EB000    PPE at FFFFF5FAFD600000    PDE at FFFFF5FAC0000010    PTE at FFFFF58000002B78
+    // contains 0A0000005DC78867  contains 0A0000005DC79867  contains 0A0000005DC7A867  contains 81000000625D5867
+    // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  pfn 5dc7a     ---DA--UWEV  pfn 625d5     ---DA--UW-V
+    // ```
+    let tr = parser.virt_translate(0x56fbcc.into()).unwrap();
+    assert!(tr.readable);
+    assert!(tr.writable);
+    assert!(!tr.executable);
+    assert!(tr.user_accessible);
+
+    // ```text
+    // 32.1: kd> !pte 0000000000451000
+    //                                            VA 0000000000451000
+    // PXE at FFFFF5FAFD7EB000    PPE at FFFFF5FAFD600000    PDE at FFFFF5FAC0000010    PTE at FFFFF58000002288
+    // contains 0A0000005DC78867  contains 0A0000005DC79867  contains 0A0000005DC7A867  contains 0100000006235025
+    // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  pfn 5dc7a     ---DA--UWEV  pfn 6235      ----A--UREV
+    // ```
+    let tr = parser.virt_translate(0x451000.into()).unwrap();
+    assert!(tr.readable);
+    assert!(!tr.writable);
+    assert!(tr.executable);
+    assert!(tr.user_accessible);
+
+    // ```text
+    // 32.1: kd> !pte fffff801`23103ba0
+    //                                         VA fffff80123103ba0
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048C0    PTE at FFFFF5FC00918818
+    // contains 0000000002709063  contains 000000000270A063  contains 0A000000050001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 5000      -GL-A--KREV  LARGE PAGE pfn 5103
+    // ```
+    let tr = parser.virt_translate(0xfffff80123103ba0.into()).unwrap();
+    assert!(tr.readable);
+    assert!(!tr.writable);
+    assert!(tr.executable);
+    assert!(!tr.user_accessible);
 }
