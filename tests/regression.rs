@@ -5,7 +5,9 @@ use std::fs::File;
 use std::ops::Range;
 use std::path::PathBuf;
 
-use kdmp_parser::{AddrTranslationError, Gpa, Gva, KdmpParserError, KernelDumpParser, PageKind};
+use kdmp_parser::{
+    AddrTranslationError, Gpa, Gva, KdmpParserError, KernelDumpParser, PageKind, PxeNotPresent,
+};
 use serde::Deserialize;
 
 /// Convert an hexadecimal encoded integer string into a `u64`.
@@ -598,6 +600,8 @@ fn regressions() {
         0xcc
     ]);
 
+    // This is `@rsp` / stack memory.
+    //
     // ```text
     // 32.1: kd> !pte 0x56fbcc
     //                                            VA 000000000056fbcc
@@ -606,11 +610,12 @@ fn regressions() {
     // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  pfn 5dc7a     ---DA--UWEV  pfn 625d5     ---DA--UW-V
     // ```
     let tr = parser.virt_translate(0x56fbcc.into()).unwrap();
-    assert!(tr.readable);
     assert!(tr.writable);
     assert!(!tr.executable);
     assert!(tr.user_accessible);
 
+    // This is `@rip` / executable memory
+    //
     // ```text
     // 32.1: kd> !pte 0000000000451000
     //                                            VA 0000000000451000
@@ -619,11 +624,12 @@ fn regressions() {
     // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  pfn 5dc7a     ---DA--UWEV  pfn 6235      ----A--UREV
     // ```
     let tr = parser.virt_translate(0x451000.into()).unwrap();
-    assert!(tr.readable);
     assert!(!tr.writable);
     assert!(tr.executable);
     assert!(tr.user_accessible);
 
+    // This is `nt!NtCreateProcess` in a large page of nt.
+    //
     // ```text
     // 32.1: kd> !pte fffff801`23103ba0
     //                                         VA fffff80123103ba0
@@ -632,8 +638,56 @@ fn regressions() {
     // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 5000      -GL-A--KREV  LARGE PAGE pfn 5103
     // ```
     let tr = parser.virt_translate(0xfffff80123103ba0.into()).unwrap();
-    assert!(tr.readable);
     assert!(!tr.writable);
     assert!(tr.executable);
     assert!(!tr.user_accessible);
+
+    // This is kernel stack.
+    //
+    // ```text
+    // 32.1: kd> !pte ffffa587dcc2f650
+    //                                            VA ffffa587dcc2f650
+    // PXE at FFFFF5FAFD7EBA58    PPE at FFFFF5FAFD74B0F8    PDE at FFFFF5FAE961F730    PTE at FFFFF5D2C3EE6178
+    // contains 0A00000104B61863  contains 0A00000104B62863  contains 0A000000EA030863  contains 8A000000408FF963
+    // pfn 104b61    ---DA--KWEV  pfn 104b62    ---DA--KWEV  pfn ea030     ---DA--KWEV  pfn 408ff     -G-DA--KW-V
+    // ```
+    let tr = parser.virt_translate(0xffffa587dcc2f650.into()).unwrap();
+    assert!(tr.writable);
+    assert!(!tr.executable);
+    assert!(!tr.user_accessible);
+
+    // This is unaccessible memory.
+    //
+    // ```text
+    // 32.1: kd> !pte 0
+    //                                            VA 0000000000000000
+    // PXE at FFFFF5FAFD7EB000    PPE at FFFFF5FAFD600000    PDE at FFFFF5FAC0000000    PTE at FFFFF58000000000
+    // contains 0A0000005DC78867  contains 0A0000005DC79867  contains 0000000000000000
+    // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  contains 0000000000000000
+    // not valid
+    // ```
+    //
+    // ```text
+    // 32.1: kd> !pte ffffffffffffffff
+    //                                            VA ffffffffffffffff
+    // PXE at FFFFF5FAFD7EBFF8    PPE at FFFFF5FAFD7FFFF8    PDE at FFFFF5FAFFFFFFF8    PTE at FFFFF5FFFFFFFFF8
+    // contains 0000000002725063  contains 0000000002726063  contains 0000000002728063  contains 0000FFFFFFFFF000
+    // pfn 2725      ---DA--KWEV  pfn 2726      ---DA--KWEV  pfn 2728      ---DA--KWEV  not valid
+    //                                                                                   Page has been freed
+    // ```
+    let gva = 0.into();
+    assert!(matches!(
+        parser.virt_translate(gva),
+        Err(KdmpParserError::AddrTranslation(
+            AddrTranslationError::Virt(fault_gva, PxeNotPresent::Pde)
+        )) if fault_gva == gva
+    ));
+
+    let gva = 0xffffffff_ffffffff.into();
+    assert!(matches!(
+        parser.virt_translate(gva),
+        Err(KdmpParserError::AddrTranslation(
+            AddrTranslationError::Virt(fault_gva, PxeNotPresent::Pte)
+        )) if fault_gva == gva
+    ));
 }

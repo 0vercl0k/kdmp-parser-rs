@@ -23,6 +23,11 @@ use crate::structs::{
 use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
 /// The details related to a virtual to physical address translation.
+///
+/// If you are wondering why there is no 'readable' field, it is because
+/// [`KernelDumpParser::virt_translate`] returns an error if one of the PXE is
+/// marked as not present. In other words, if the translation succeeds, the page
+/// is at least readable.
 #[derive(Debug)]
 pub struct TranslationDetails {
     /// The physical address backing the virtual address that was requested.
@@ -31,8 +36,6 @@ pub struct TranslationDetails {
     pub offset: u64,
     /// The kind of physical page.
     pub page_kind: PageKind,
-    /// Is the page readable?
-    pub readable: bool,
     /// Is the page writable?
     pub writable: bool,
     /// Is the page executable?
@@ -43,7 +46,6 @@ pub struct TranslationDetails {
 
 impl TranslationDetails {
     pub fn new(pfn: Pfn, offset: u64, page_kind: PageKind, pxes: &[Pxe]) -> Self {
-        let readable = pxes.iter().all(Pxe::present);
         let writable = pxes.iter().all(Pxe::writable);
         let executable = pxes.iter().all(Pxe::executable);
         let user_accessible = pxes.iter().all(Pxe::user_accessible);
@@ -52,7 +54,6 @@ impl TranslationDetails {
             pfn,
             offset,
             page_kind,
-            readable,
             writable,
             executable,
             user_accessible,
