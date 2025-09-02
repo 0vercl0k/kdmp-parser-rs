@@ -78,7 +78,7 @@ mod windows {
     type LPCSTR = *mut u8;
     type LPVOID = *const u8;
 
-    extern "system" {
+    unsafe extern "system" {
         /// Creates or opens a named or unnamed file mapping object for a
         /// specified file.
         ///
@@ -204,7 +204,7 @@ mod unix {
     const MAP_SHARED: i32 = 1;
     const MAP_FAILED: *const u8 = usize::MAX as _;
 
-    extern "system" {
+    unsafe extern "system" {
         fn mmap(
             addr: *const u8,
             length: usize,

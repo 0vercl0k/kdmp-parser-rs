@@ -5,14 +5,14 @@ use std::fs::File;
 use std::ops::Range;
 use std::path::PathBuf;
 
-use kdmp_parser::{AddrTranslationError, Gpa, Gva, KdmpParserError, KernelDumpParser};
+use kdmp_parser::{
+    AddrTranslationError, Gpa, Gva, KdmpParserError, KernelDumpParser, PageKind, PxeNotPresent,
+};
 use serde::Deserialize;
 
 /// Convert an hexadecimal encoded integer string into a `u64`.
 pub fn hex_str(s: &str) -> u64 {
-    let prefix = s.strip_prefix("0x");
-
-    u64::from_str_radix(prefix.unwrap_or(s), 16).unwrap()
+    u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap()
 }
 
 #[derive(Debug, Deserialize)]
@@ -447,6 +447,7 @@ fn regressions() {
     ];
     assert!(parser.virt_read(0x1a42ea30240.into(), &mut buffer).is_ok());
     assert_eq!(buffer, expected_buffer);
+
     // Example of a valid PTE that don't have a physical page backing it (in
     // kerneldump.dmp):
     // ```
@@ -482,5 +483,211 @@ fn regressions() {
         Err(KdmpParserError::AddrTranslation(
             AddrTranslationError::Phys(gpa)
         )) if gpa == 0x1bc4060.into()
+    ));
+
+    // BUG: https://github.com/0vercl0k/kdmp-parser-rs/issues/10
+    // When reading the end of a virtual memory page that has no available
+    // memory behind, there was an issue in the virtual read algorithm. The
+    // first time the loop ran, it reads as much as it can and if the user
+    // wanted more, then the loop runs a second time to virt translate the next
+    // page. However, because there is nothing mapped the virtual to physical
+    // translation fails & bails (because of `?`) which suggests to the user
+    // that the read operation completely failed when it was in fact able to
+    // read some amount of bytes.
+    // ```text
+    // kd> db 00007ff7`ab766ff7
+    // 00007ff7`ab766ff7  00 00 00 00 00 00 00 00-00 ?? ?? ?? ?? ?? ?? ??  .........???????
+    // ...
+    // kdmp-parser-rs>cargo r --example parser -- mem.dmp --mem 00007ff7`ab766ff7 --virt --len 10
+    //     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+    //      Running `target\debug\examples\parser.exe mem.dmp --mem 00007ff7`ab766ff7 --virt --len 10`
+    // There is no virtual memory available at 0x7ff7ab766ff7
+    // ```
+    // ```text
+    // kd> db fffff803`f3086fef
+    // fffff803`f3086fef  9d f5 de ff 48 85 c0 74-0a 40 8a cf e8 80 ee ba  ....H..t.@......
+    // fffff803`f3086fff  ff ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  .???????????????
+    // fffff803`f308700f  ?? ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+    // ```
+    let mut buffer = [0; 32];
+    assert_eq!(
+        parser
+            .virt_read(0xfffff803f3086fef.into(), &mut buffer)
+            .unwrap(),
+        17
+    );
+
+    // ```text
+    // kd> !process 0 0
+    // PROCESS ffffc00c5120d580
+    //     SessionId: 1  Cid: 0d24    Peb: 3a8dcfb000  ParentCid: 02b4
+    //     DirBase: 0ea00002  ObjectTable: ffffd106e2336a80  HandleCount: 201.
+    //     Image: RuntimeBroker.exe
+    // kd> .process /p ffffc00c5120d580; !peb 3a8dcfb000
+    // kd> db 0x15cc6603908
+    // 0000015c`c6603908  43 00 3a 00 5c 00 57 00-69 00 6e 00 64 00 6f 00  C.:.\.W.i.n.d.o.
+    // 0000015c`c6603918  77 00 73 00 5c 00 53 00-79 00 73 00 74 00 65 00  w.s.\.S.y.s.t.e.
+    // 0000015c`c6603928  6d 00 33 00 32 00 5c 00-52 00 75 00 6e 00 74 00  m.3.2.\.R.u.n.t.
+    // 0000015c`c6603938  69 00 6d 00 65 00 42 00-72 00 6f 00 6b 00 65 00  i.m.e.B.r.o.k.e.
+    // ```
+    let parser = KernelDumpParser::new(&complete_dump.file).unwrap();
+    let mut buffer = [0; 64];
+    assert!(
+        parser
+            .virt_read_exact_with_dtb(0x15cc6603908.into(), &mut buffer, 0xea00002.into())
+            .is_ok()
+    );
+
+    assert_eq!(buffer, [
+        0x43, 0x00, 0x3a, 0x00, 0x5c, 0x00, 0x57, 0x00, 0x69, 0x00, 0x6e, 0x00, 0x64, 0x00, 0x6f,
+        0x00, 0x77, 0x00, 0x73, 0x00, 0x5c, 0x00, 0x53, 0x00, 0x79, 0x00, 0x73, 0x00, 0x74, 0x00,
+        0x65, 0x00, 0x6d, 0x00, 0x33, 0x00, 0x32, 0x00, 0x5c, 0x00, 0x52, 0x00, 0x75, 0x00, 0x6e,
+        0x00, 0x74, 0x00, 0x69, 0x00, 0x6d, 0x00, 0x65, 0x00, 0x42, 0x00, 0x72, 0x00, 0x6f, 0x00,
+        0x6b, 0x00, 0x65, 0x00
+    ]);
+
+    // Read from the middle of a large page.
+    // ```text
+    // 32.1: kd> !pte nt
+    //                                            VA fffff80122800000
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A0    PTE at FFFFF5FC00914000
+    // contains 0000000002709063  contains 000000000270A063  contains 8A000000048001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 4800
+    // ```
+    let parser = KernelDumpParser::new(&wow64.file).unwrap();
+    let tr = parser.virt_translate(0xfffff80122800000.into()).unwrap();
+    assert!(matches!(tr.page_kind, PageKind::Large));
+    assert!(matches!(tr.pfn.u64(), 0x4800));
+    let mut buffer = [0; 0x10];
+    // ```text
+    // 32.1: kd> db 0xfffff80122800000 + 0x100000 - 8
+    // 002b:fffff801`228ffff8  70 72 05 00 04 3a 65 00-54 3a 65 00 bc 82 0c 00  pr...:e.T:e.....
+    // ```
+    assert!(
+        parser
+            .virt_read_exact(Gva::new(0xfffff80122800000 + 0x100000 - 8), &mut buffer)
+            .is_ok()
+    );
+    assert_eq!(buffer, [
+        0x70, 0x72, 0x05, 0x00, 0x04, 0x3a, 0x65, 0x00, 0x54, 0x3a, 0x65, 0x00, 0xbc, 0x82, 0x0c,
+        0x00
+    ]);
+
+    // Read from two straddling large pages.
+    // ```text
+    // 32.1: kd> !pte 0xfffff80122800000 + 0x200000 - 0x8
+    //                                            VA fffff801229ffff8
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A0    PTE at FFFFF5FC00914FF8
+    // contains 0000000002709063  contains 000000000270A063  contains 8A000000048001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 49ff
+    //
+    // 32.1: kd> !pte 0xfffff80122800000 + 0x200000
+    //                                            VA fffff80122a00000
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A8    PTE at FFFFF5FC00915000
+    // contains 0000000002709063  contains 000000000270A063  contains 0A00000004A001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4a00      -GL-A--KREV  LARGE PAGE pfn 4a00
+    // 32.1: kd> db 0xfffff80122800000 + 0x200000 - 0x8
+    // 002b:fffff801`229ffff8  63 00 72 00 6f 00 73 00-cc cc cc cc cc cc cc cc  c.r.o.s.........
+    // ```
+    let mut buffer = [0; 0x10];
+    assert!(
+        parser
+            .virt_read_exact(Gva::new(0xfffff80122800000 + 0x200000 - 0x8), &mut buffer)
+            .is_ok()
+    );
+    assert_eq!(buffer, [
+        0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+        0xcc
+    ]);
+
+    // This is `@rsp` / stack memory.
+    //
+    // ```text
+    // 32.1: kd> !pte 0x56fbcc
+    //                                            VA 000000000056fbcc
+    // PXE at FFFFF5FAFD7EB000    PPE at FFFFF5FAFD600000    PDE at FFFFF5FAC0000010    PTE at FFFFF58000002B78
+    // contains 0A0000005DC78867  contains 0A0000005DC79867  contains 0A0000005DC7A867  contains 81000000625D5867
+    // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  pfn 5dc7a     ---DA--UWEV  pfn 625d5     ---DA--UW-V
+    // ```
+    let tr = parser.virt_translate(0x56fbcc.into()).unwrap();
+    assert!(tr.writable);
+    assert!(!tr.executable);
+    assert!(tr.user_accessible);
+
+    // This is `@rip` / executable memory
+    //
+    // ```text
+    // 32.1: kd> !pte 0000000000451000
+    //                                            VA 0000000000451000
+    // PXE at FFFFF5FAFD7EB000    PPE at FFFFF5FAFD600000    PDE at FFFFF5FAC0000010    PTE at FFFFF58000002288
+    // contains 0A0000005DC78867  contains 0A0000005DC79867  contains 0A0000005DC7A867  contains 0100000006235025
+    // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  pfn 5dc7a     ---DA--UWEV  pfn 6235      ----A--UREV
+    // ```
+    let tr = parser.virt_translate(0x451000.into()).unwrap();
+    assert!(!tr.writable);
+    assert!(tr.executable);
+    assert!(tr.user_accessible);
+
+    // This is `nt!NtCreateProcess` in a large page of nt.
+    //
+    // ```text
+    // 32.1: kd> !pte fffff801`23103ba0
+    //                                         VA fffff80123103ba0
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048C0    PTE at FFFFF5FC00918818
+    // contains 0000000002709063  contains 000000000270A063  contains 0A000000050001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 5000      -GL-A--KREV  LARGE PAGE pfn 5103
+    // ```
+    let tr = parser.virt_translate(0xfffff80123103ba0.into()).unwrap();
+    assert!(!tr.writable);
+    assert!(tr.executable);
+    assert!(!tr.user_accessible);
+
+    // This is kernel stack.
+    //
+    // ```text
+    // 32.1: kd> !pte ffffa587dcc2f650
+    //                                            VA ffffa587dcc2f650
+    // PXE at FFFFF5FAFD7EBA58    PPE at FFFFF5FAFD74B0F8    PDE at FFFFF5FAE961F730    PTE at FFFFF5D2C3EE6178
+    // contains 0A00000104B61863  contains 0A00000104B62863  contains 0A000000EA030863  contains 8A000000408FF963
+    // pfn 104b61    ---DA--KWEV  pfn 104b62    ---DA--KWEV  pfn ea030     ---DA--KWEV  pfn 408ff     -G-DA--KW-V
+    // ```
+    let tr = parser.virt_translate(0xffffa587dcc2f650.into()).unwrap();
+    assert!(tr.writable);
+    assert!(!tr.executable);
+    assert!(!tr.user_accessible);
+
+    // This is unaccessible memory.
+    //
+    // ```text
+    // 32.1: kd> !pte 0
+    //                                            VA 0000000000000000
+    // PXE at FFFFF5FAFD7EB000    PPE at FFFFF5FAFD600000    PDE at FFFFF5FAC0000000    PTE at FFFFF58000000000
+    // contains 0A0000005DC78867  contains 0A0000005DC79867  contains 0000000000000000
+    // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  contains 0000000000000000
+    // not valid
+    // ```
+    //
+    // ```text
+    // 32.1: kd> !pte ffffffffffffffff
+    //                                            VA ffffffffffffffff
+    // PXE at FFFFF5FAFD7EBFF8    PPE at FFFFF5FAFD7FFFF8    PDE at FFFFF5FAFFFFFFF8    PTE at FFFFF5FFFFFFFFF8
+    // contains 0000000002725063  contains 0000000002726063  contains 0000000002728063  contains 0000FFFFFFFFF000
+    // pfn 2725      ---DA--KWEV  pfn 2726      ---DA--KWEV  pfn 2728      ---DA--KWEV  not valid
+    //                                                                                   Page has been freed
+    // ```
+    let gva = 0.into();
+    assert!(matches!(
+        parser.virt_translate(gva),
+        Err(KdmpParserError::AddrTranslation(
+            AddrTranslationError::Virt(fault_gva, PxeNotPresent::Pde)
+        )) if fault_gva == gva
+    ));
+
+    let gva = 0xffffffff_ffffffff.into();
+    assert!(matches!(
+        parser.virt_translate(gva),
+        Err(KdmpParserError::AddrTranslation(
+            AddrTranslationError::Virt(fault_gva, PxeNotPresent::Pte)
+        )) if fault_gva == gva
     ));
 }

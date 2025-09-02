@@ -15,12 +15,63 @@ use crate::error::{PxeNotPresent, Result};
 use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
-    read_struct, BmpHeader64, Context, DumpType, ExceptionRecord64, FullRdmpHeader64, Header64,
-    KdDebuggerData64, KernelRdmpHeader64, LdrDataTableEntry, ListEntry, Page, PfnRange,
-    PhysmemDesc, PhysmemMap, PhysmemRun, UnicodeString, DUMP_HEADER64_EXPECTED_SIGNATURE,
-    DUMP_HEADER64_EXPECTED_VALID_DUMP,
+    BmpHeader64, Context, DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
+    DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, KdDebuggerData64, KernelRdmpHeader64,
+    LdrDataTableEntry, ListEntry, PageKind, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun,
+    UnicodeString, read_struct,
 };
 use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
+
+/// The details related to a virtual to physical address translation.
+///
+/// If you are wondering why there is no 'readable' field, it is because
+/// [`KernelDumpParser::virt_translate`] returns an error if one of the PXE is
+/// marked as not present. In other words, if the translation succeeds, the page
+/// is at least readable.
+#[derive(Debug)]
+pub struct VirtTranslationDetails {
+    /// The physical address backing the virtual address that was requested.
+    pub pfn: Pfn,
+    /// The byte offset in that physical page.
+    pub offset: u64,
+    /// The kind of physical page.
+    pub page_kind: PageKind,
+    /// Is the page writable?
+    pub writable: bool,
+    /// Is the page executable?
+    pub executable: bool,
+    /// Is the page user accessible?
+    pub user_accessible: bool,
+}
+
+impl VirtTranslationDetails {
+    pub fn new(pxes: &[Pxe], gva: Gva) -> Self {
+        let writable = pxes.iter().all(Pxe::writable);
+        let executable = pxes.iter().all(Pxe::executable);
+        let user_accessible = pxes.iter().all(Pxe::user_accessible);
+        let pfn = pxes.last().map(|p| p.pfn).expect("at least one pxe");
+        let page_kind = match pxes.len() {
+            4 => PageKind::Normal,
+            3 => PageKind::Large,
+            2 => PageKind::Huge,
+            _ => unreachable!("pxes len should be between 2 and 4"),
+        };
+        let offset = page_kind.page_offset(gva.u64());
+
+        Self {
+            pfn,
+            offset,
+            page_kind,
+            writable,
+            executable,
+            user_accessible,
+        }
+    }
+
+    pub fn gpa(&self) -> Gpa {
+        self.pfn.gpa_with_offset(self.offset)
+    }
+}
 
 fn gpa_from_bitmap(bitmap_idx: u64, bit_idx: usize) -> Option<Gpa> {
     let pfn = Pfn::new(
@@ -33,13 +84,13 @@ fn gpa_from_bitmap(bitmap_idx: u64, bit_idx: usize) -> Option<Gpa> {
 }
 
 fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
-    let offset = page_idx.checked_mul(Page::size())?;
+    let offset = page_idx.checked_mul(PageKind::Normal.size())?;
 
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
 }
 
 /// This trait is used to implement generic behavior for both 32/64-bit.
-/// We'll implement it for both [`u32`] & [`u64`].
+/// It is implemented for both [`u32`] & [`u64`].
 trait PtrSize: Sized + Copy + Into<u64> + From<u32> {
     fn checked_add(self, rhs: Self) -> Option<Self>;
 }
@@ -504,7 +555,7 @@ impl KernelDumpParser {
             // So let's figure out the maximum amount of bytes we can read off this page.
             // Either, we read it until its end, or we stop if the user wants us to read
             // less.
-            let left_in_page = (Page::size() - gpa.offset()) as usize;
+            let left_in_page = (PageKind::Normal.size() - gpa.offset()) as usize;
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
@@ -555,9 +606,15 @@ impl KernelDumpParser {
     }
 
     /// Translate a [`Gva`] into a [`Gpa`].
-    pub fn virt_translate(&self, gva: Gva) -> Result<Gpa> {
+    pub fn virt_translate(&self, gva: Gva) -> Result<VirtTranslationDetails> {
+        self.virt_translate_with_dtb(gva, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Translate a [`Gva`] into a [`Gpa`] using a specific directory table base
+    /// / set of page tables.
+    pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<VirtTranslationDetails> {
         // Aligning in case PCID bits are set (bits 11:0)
-        let pml4_base = Gpa::from(self.headers.directory_table_base).page_align();
+        let pml4_base = dtb.page_align();
         let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
         let pml4e = Pxe::from(self.phys_read_struct::<u64>(pml4e_gpa)?);
         if !pml4e.present() {
@@ -576,7 +633,7 @@ impl KernelDumpParser {
         // directory; see Table 4-1
         let pd_base = pdpte.pfn.gpa();
         if pdpte.large_page() {
-            return Ok(Gpa::new(pd_base.u64() + (gva.u64() & 0x3fff_ffff)));
+            return Ok(VirtTranslationDetails::new(&[pml4e, pdpte], gva));
         }
 
         let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
@@ -590,7 +647,7 @@ impl KernelDumpParser {
         // table; see Table 4-18
         let pt_base = pde.pfn.gpa();
         if pde.large_page() {
-            return Ok(Gpa::new(pt_base.u64() + (gva.u64() & 0x1f_ffff)));
+            return Ok(VirtTranslationDetails::new(&[pml4e, pdpte, pde], gva));
         }
 
         let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
@@ -603,13 +660,17 @@ impl KernelDumpParser {
             }
         }
 
-        let page_base = pte.pfn.gpa();
-
-        Ok(Gpa::new(page_base.u64() + gva.offset()))
+        Ok(VirtTranslationDetails::new(&[pml4e, pdpte, pde, pte], gva))
     }
 
     /// Read virtual memory starting at `gva` into a `buffer`.
     pub fn virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<usize> {
+        self.virt_read_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read virtual memory starting at `gva` into a `buffer` using a specific
+    /// directory table base / set of page tables.
+    pub fn virt_read_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<usize> {
         // Amount of bytes left to read.
         let mut amount_left = buf.len();
         // Total amount of bytes that we have successfully read.
@@ -618,18 +679,31 @@ impl KernelDumpParser {
         let mut addr = gva;
         // Let's try to read as much as the user wants.
         while amount_left > 0 {
+            // Translate the gva into a gpa. But make sure to not early return if an error
+            // occured if we already have read some bytes.
+            let translation = match self.virt_translate_with_dtb(addr, dtb) {
+                Ok(tr) => tr,
+                Err(e) => {
+                    if total_read > 0 {
+                        // If we already read some bytes, return how many we read.
+                        return Ok(total_read);
+                    }
+
+                    return Err(e);
+                }
+            };
+
             // We need to take care of reads that straddle different virtual memory pages.
-            // So let's figure out the maximum amount of bytes we can read off this page.
-            // Either, we read it until its end, or we stop if the user wants us to read
-            // less.
-            let left_in_page = (Page::size() - addr.offset()) as usize;
+            // First, figure out the maximum amount of bytes we can read off this page.
+            let left_in_page = (translation.page_kind.size() - translation.offset) as usize;
+            // Then, either we read it until its end, or we stop before if we can get by
+            // with less.
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
-            // Translate the gva into a gpa..
-            let gpa = self.virt_translate(addr)?;
-            // .. and read the physical memory!
-            let amount_read = self.phys_read(gpa, slice)?;
+
+            // Read the physical memory!
+            let amount_read = self.phys_read(translation.gpa(), slice)?;
             // Update the total amount of read bytes and how much work we have left.
             total_read += amount_read;
             amount_left -= amount_read;
@@ -646,17 +720,36 @@ impl KernelDumpParser {
         Ok(total_read)
     }
 
-    /// Try to read virtual memory starting at `gva` into a `buffer`.  If a
+    /// Try to read virtual memory starting at `gva` into a `buffer`. If a
     /// memory translation error occurs, it'll return `None` instead of an
     /// error.
     pub fn try_virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<usize>> {
         filter_addr_translation_err(self.virt_read(gva, buf))
     }
 
+    /// Try to read virtual memory starting at `gva` into a `buffer` using a
+    /// specific directory table base / set of page tables. If a
+    /// memory translation error occurs, it'll return `None` instead of an
+    /// error.
+    pub fn try_virt_read_with_dtb(
+        &self,
+        gva: Gva,
+        buf: &mut [u8],
+        dtb: Gpa,
+    ) -> Result<Option<usize>> {
+        filter_addr_translation_err(self.virt_read_with_dtb(gva, buf, dtb))
+    }
+
     /// Read an exact amount of virtual memory starting at `gva`.
     pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<()> {
+        self.virt_read_exact_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read an exact amount of virtual memory starting at `gva` using a
+    /// specific directory table base / set of page tables.
+    pub fn virt_read_exact_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<()> {
         // Read virtual memory.
-        let len = self.virt_read(gva, buf)?;
+        let len = self.virt_read_with_dtb(gva, buf, dtb)?;
 
         // If we read as many bytes as we wanted, then it's a win..
         if len == buf.len() {
@@ -672,25 +765,51 @@ impl KernelDumpParser {
     /// memory translation error occurs, it'll return `None` instead of an
     /// error.
     pub fn try_virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
-        filter_addr_translation_err(self.virt_read_exact(gva, buf))
+        self.try_virt_read_exact_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Try to read an exact amount of virtual memory starting at `gva` using a
+    /// specific directory table base / set of page tables. If a
+    /// memory translation error occurs, it'll return `None` instead of an
+    /// error.
+    pub fn try_virt_read_exact_with_dtb(
+        &self,
+        gva: Gva,
+        buf: &mut [u8],
+        dtb: Gpa,
+    ) -> Result<Option<()>> {
+        filter_addr_translation_err(self.virt_read_exact_with_dtb(gva, buf, dtb))
     }
 
     /// Read a `T` from virtual memory.
     pub fn virt_read_struct<T>(&self, gva: Gva) -> Result<T> {
+        self.virt_read_struct_with_dtb(gva, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read a `T` from virtual memory using a specific directory table base /
+    /// set of page tables.
+    pub fn virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<T> {
         let mut t = mem::MaybeUninit::uninit();
         let size_of_t = mem::size_of_val(&t);
         let slice_over_t =
             unsafe { slice::from_raw_parts_mut(t.as_mut_ptr() as *mut u8, size_of_t) };
 
-        self.virt_read_exact(gva, slice_over_t)?;
+        self.virt_read_exact_with_dtb(gva, slice_over_t, dtb)?;
 
         Ok(unsafe { t.assume_init() })
     }
 
-    /// Try to read a `T` from virtual memory. If a memory translation error
+    /// Try to read a `T` from virtual memory . If a memory translation error
     /// occurs, it'll return `None` instead of an error.
     pub fn try_virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
-        filter_addr_translation_err(self.virt_read_struct::<T>(gva))
+        self.try_virt_read_struct_with_dtb::<T>(gva, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Try to read a `T` from virtual memory using a specific directory table
+    /// base / set of page tables. If a memory translation error occurs, it'
+    /// ll return `None` instead of an error.
+    pub fn try_virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<Option<T>> {
+        filter_addr_translation_err(self.virt_read_struct_with_dtb::<T>(gva, dtb))
     }
 
     pub fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
@@ -709,12 +828,28 @@ impl KernelDumpParser {
     where
         P: PtrSize,
     {
+        self.try_virt_read_unicode_string_with_dtb(
+            unicode_str,
+            Gpa::new(self.headers.directory_table_base),
+        )
+    }
+
+    /// Try to read a `UNICODE_STRING` using a specific directory table base /
+    /// set of page tables.
+    fn try_virt_read_unicode_string_with_dtb<P>(
+        &self,
+        unicode_str: &UnicodeString<P>,
+        dtb: Gpa,
+    ) -> Result<Option<String>>
+    where
+        P: PtrSize,
+    {
         if (unicode_str.length % 2) != 0 {
             return Err(KdmpParserError::InvalidUnicodeString);
         }
 
         let mut buffer = vec![0; unicode_str.length.into()];
-        match self.virt_read_exact(Gva::new(unicode_str.buffer.into()), &mut buffer) {
+        match self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb) {
             Ok(_) => {}
             // If we encountered a memory translation error, we don't consider this a failure.
             Err(KdmpParserError::AddrTranslation(_)) => return Ok(None),
@@ -766,7 +901,7 @@ impl KernelDumpParser {
 
                 // Move the page offset along.
                 page_offset = page_offset
-                    .checked_add(Page::size())
+                    .checked_add(PageKind::Normal.size())
                     .ok_or(KdmpParserError::PageOffsetOverflow(run_idx, page_idx))?;
             }
         }
@@ -814,7 +949,7 @@ impl KernelDumpParser {
 
                 let insert = physmem.insert(pa, page_offset);
                 debug_assert!(insert.is_none());
-                page_offset = page_offset.checked_add(Page::size()).ok_or(
+                page_offset = page_offset.checked_add(PageKind::Normal.size()).ok_or(
                     KdmpParserError::BitmapPageOffsetOverflow(bitmap_idx, bit_idx),
                 )?;
             }
@@ -902,7 +1037,7 @@ impl KernelDumpParser {
                 let insert = physmem.insert(gpa, page_offset);
                 debug_assert!(insert.is_none());
                 page_offset = page_offset
-                    .checked_add(Page::size())
+                    .checked_add(PageKind::Normal.size())
                     .ok_or(KdmpParserError::Overflow("w/ page_offset"))?;
             }
 

@@ -120,12 +120,12 @@ impl Pxe {
     ///     Pfn::new(0x6d600),
     ///     PxeFlags::Present
     /// );
-    /// assert_eq!(p.present(), true);
+    /// assert!(p.present());
     /// let np = Pxe::new(
     ///     Pfn::new(0x1337),
     ///     PxeFlags::UserAccessible
     /// );
-    /// assert_eq!(np.present(), false);
+    /// assert!(!np.present());
     /// # }
     /// ```
     pub fn present(&self) -> bool {
@@ -143,12 +143,12 @@ impl Pxe {
     ///     Pfn::new(0x6d600),
     ///     PxeFlags::LargePage
     /// );
-    /// assert_eq!(p.large_page(), true);
+    /// assert!(p.large_page());
     /// let np = Pxe::new(
     ///     Pfn::new(0x1337),
     ///     PxeFlags::UserAccessible
     /// );
-    /// assert_eq!(np.large_page(), false);
+    /// assert!(!np.large_page());
     /// # }
     /// ```
     pub fn large_page(&self) -> bool {
@@ -164,12 +164,63 @@ impl Pxe {
     /// # fn main() {
     /// let p = Pxe::from(0x166B7880);
     /// let np = Pxe::from(0xA000000077AF867);
-    /// assert_eq!(p.transition(), true);
-    /// assert_eq!(np.transition(), false);
+    /// assert!(p.transition());
+    /// assert!(!np.transition());
     /// # }
     /// ```
     pub fn transition(&self) -> bool {
         !self.present() && self.flags.contains(PxeFlags::Transition)
+    }
+
+    /// Is the memory described by this [`Pxe`] writable?
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # fn main() {
+    /// let w = Pxe::from(0x2709063);
+    /// let ro = Pxe::from(0x8A00000002C001A1);
+    /// assert!(w.writable());
+    /// assert!(!ro.writable());
+    /// # }
+    /// ```
+    pub fn writable(&self) -> bool {
+        self.flags.contains(PxeFlags::Writable)
+    }
+
+    /// Is the memory described by this [`Pxe`] executable?
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # fn main() {
+    /// let x = Pxe::from(0x270a063);
+    /// let nx = Pxe::from(0x8A00000002C001A1);
+    /// assert!(x.executable());
+    /// assert!(!nx.executable());
+    /// # }
+    /// ```
+    pub fn executable(&self) -> bool {
+        !self.flags.contains(PxeFlags::NoExecute)
+    }
+
+    /// Is the memory described by this [`Pxe`] accessible by user-mode?
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # fn main() {
+    /// let u = Pxe::from(0x8000000F34E5025);
+    /// let s = Pxe::from(0x270A063);
+    /// assert!(u.user_accessible());
+    /// assert!(!s.user_accessible());
+    /// # }
+    /// ```
+    pub fn user_accessible(&self) -> bool {
+        self.flags.contains(PxeFlags::UserAccessible)
     }
 }
 

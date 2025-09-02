@@ -14,10 +14,12 @@
 //! let page_offset = gva.offset();
 //! ```
 use std::fmt::Display;
+use std::num::ParseIntError;
 use std::ops::AddAssign;
+use std::str::FromStr;
 
 use crate::pxe::Pfn;
-use crate::structs::Page;
+use crate::structs::PageKind;
 
 /// A bunch of useful methods to manipulate 64-bit addresses of
 /// any kind.
@@ -37,7 +39,7 @@ pub trait Gxa: Sized + Default + Copy + From<u64> {
 
     /// Page-align it.
     fn page_align(&self) -> Self {
-        Self::from(self.u64() & !0xfff)
+        Self::from(self.u64() & !0xf_ff)
     }
 
     /// Get the next aligned page.
@@ -45,7 +47,7 @@ pub trait Gxa: Sized + Default + Copy + From<u64> {
         Self::from(
             self.page_align()
                 .u64()
-                .checked_add(Page::size())
+                .checked_add(PageKind::Normal.size())
                 .expect("Cannot overflow"),
         )
     }
@@ -222,6 +224,20 @@ impl From<&Gpa> for u64 {
 impl Display for Gpa {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "GPA:{:#x}", self.0)
+    }
+}
+
+/// Parse a [`Gpa`] from a string.
+impl FromStr for Gpa {
+    type Err = ParseIntError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.replace('`', "");
+
+        Ok(Gpa::new(u64::from_str_radix(
+            s.trim_start_matches("0x"),
+            16,
+        )?))
     }
 }
 
