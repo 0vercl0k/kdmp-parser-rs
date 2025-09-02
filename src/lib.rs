@@ -12,6 +12,6 @@ pub use bits::Bits;
 pub use error::{AddrTranslationError, KdmpParserError, PxeNotPresent, Result};
 pub use gxa::{Gpa, Gva, Gxa};
 pub use map::{MappedFileReader, Reader};
-pub use parse::{KernelDumpParser, TranslationDetails};
+pub use parse::{KernelDumpParser, VirtTranslationDetails};
 pub use pxe::{Pfn, Pxe, PxeFlags};
 pub use structs::{Context, DumpType, Header64, PageKind};

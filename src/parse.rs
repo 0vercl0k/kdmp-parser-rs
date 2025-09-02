@@ -29,10 +29,10 @@ use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
 /// marked as not present. In other words, if the translation succeeds, the page
 /// is at least readable.
 #[derive(Debug)]
-pub struct TranslationDetails {
+pub struct VirtTranslationDetails {
     /// The physical address backing the virtual address that was requested.
     pub pfn: Pfn,
-    /// The base physical address of the page.
+    /// The byte offset in that physical page.
     pub offset: u64,
     /// The kind of physical page.
     pub page_kind: PageKind,
@@ -44,11 +44,19 @@ pub struct TranslationDetails {
     pub user_accessible: bool,
 }
 
-impl TranslationDetails {
-    pub fn new(pfn: Pfn, offset: u64, page_kind: PageKind, pxes: &[Pxe]) -> Self {
+impl VirtTranslationDetails {
+    pub fn new(pxes: &[Pxe], gva: Gva) -> Self {
         let writable = pxes.iter().all(Pxe::writable);
         let executable = pxes.iter().all(Pxe::executable);
         let user_accessible = pxes.iter().all(Pxe::user_accessible);
+        let pfn = pxes.last().map(|p| p.pfn).expect("at least one pxe");
+        let page_kind = match pxes.len() {
+            4 => PageKind::Normal,
+            3 => PageKind::Large,
+            2 => PageKind::Huge,
+            _ => unreachable!("pxes len should be between 2 and 4"),
+        };
+        let offset = page_kind.page_offset(gva.u64());
 
         Self {
             pfn,
@@ -598,13 +606,13 @@ impl KernelDumpParser {
     }
 
     /// Translate a [`Gva`] into a [`Gpa`].
-    pub fn virt_translate(&self, gva: Gva) -> Result<TranslationDetails> {
+    pub fn virt_translate(&self, gva: Gva) -> Result<VirtTranslationDetails> {
         self.virt_translate_with_dtb(gva, Gpa::new(self.headers.directory_table_base))
     }
 
     /// Translate a [`Gva`] into a [`Gpa`] using a specific directory table base
     /// / set of page tables.
-    pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<TranslationDetails> {
+    pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<VirtTranslationDetails> {
         // Aligning in case PCID bits are set (bits 11:0)
         let pml4_base = dtb.page_align();
         let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
@@ -625,11 +633,7 @@ impl KernelDumpParser {
         // directory; see Table 4-1
         let pd_base = pdpte.pfn.gpa();
         if pdpte.large_page() {
-            let page_kind = PageKind::Huge;
-            let offset = page_kind.page_offset(gva.u64());
-            return Ok(TranslationDetails::new(pdpte.pfn, offset, page_kind, &[
-                pml4e, pdpte,
-            ]));
+            return Ok(VirtTranslationDetails::new(&[pml4e, pdpte], gva));
         }
 
         let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
@@ -643,14 +647,7 @@ impl KernelDumpParser {
         // table; see Table 4-18
         let pt_base = pde.pfn.gpa();
         if pde.large_page() {
-            let page_kind = PageKind::Large;
-            let offset = page_kind.page_offset(gva.u64());
-            return Ok(TranslationDetails::new(
-                pde.pfn,
-                offset,
-                PageKind::Large,
-                &[pml4e, pdpte, pde],
-            ));
+            return Ok(VirtTranslationDetails::new(&[pml4e, pdpte, pde], gva));
         }
 
         let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
@@ -663,12 +660,7 @@ impl KernelDumpParser {
             }
         }
 
-        let page_kind = PageKind::Normal;
-        let offset = page_kind.page_offset(gva.u64());
-
-        Ok(TranslationDetails::new(pte.pfn, offset, page_kind, &[
-            pml4e, pdpte, pde, pte,
-        ]))
+        Ok(VirtTranslationDetails::new(&[pml4e, pdpte, pde, pte], gva))
     }
 
     /// Read virtual memory starting at `gva` into a `buffer`.
