@@ -13,24 +13,76 @@
 //! let encoded = u64::from(pxe);
 //! let decoded = Pxe::from(encoded);
 //! ```
-use bitflags::bitflags;
+use std::ops::Deref;
 
-use crate::Gpa;
+use crate::{Bits, Gpa};
 
-bitflags! {
-    /// The various bits and flags that a [`Pxe`] has.
-    #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Default, PartialOrd, Ord)]
-    pub struct PxeFlags : u64 {
-        const Present = 1 << 0;
-        const Writable = 1 << 1;
-        const UserAccessible = 1 << 2;
-        const WriteThrough = 1 << 3;
-        const CacheDisabled = 1 << 4;
-        const Accessed = 1 << 5;
-        const Dirty = 1 << 6;
-        const LargePage = 1 << 7;
-        const Transition = 1 << 11;
-        const NoExecute = 1 << 63;
+/// The various bits and flags that a [`Pxe`] has.
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Default, PartialOrd, Ord)]
+pub struct PxeFlags(u64);
+
+impl PxeFlags {
+    #[must_use]
+    pub fn new(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    #[must_use]
+    pub fn present(&self) -> bool {
+        self.0.bit(0) != 0
+    }
+
+    #[must_use]
+    pub fn writable(&self) -> bool {
+        self.0.bit(1) != 0
+    }
+
+    #[must_use]
+    pub fn user_accessible(&self) -> bool {
+        self.0.bit(2) != 0
+    }
+
+    #[must_use]
+    pub fn write_through(&self) -> bool {
+        self.0.bit(3) != 0
+    }
+
+    #[must_use]
+    pub fn cache_disabled(&self) -> bool {
+        self.0.bit(4) != 0
+    }
+
+    #[must_use]
+    pub fn accessed(&self) -> bool {
+        self.0.bit(5) != 0
+    }
+
+    #[must_use]
+    pub fn dirty(&self) -> bool {
+        self.0.bit(6) != 0
+    }
+
+    #[must_use]
+    pub fn large_page(&self) -> bool {
+        self.0.bit(7) != 0
+    }
+
+    #[must_use]
+    pub fn transition(&self) -> bool {
+        self.0.bit(11) != 0
+    }
+
+    #[must_use]
+    pub fn no_execute(&self) -> bool {
+        self.0.bit(63) != 0
+    }
+}
+
+impl Deref for PxeFlags {
+    type Target = u64;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -49,18 +101,22 @@ bitflags! {
 pub struct Pfn(u64);
 
 impl Pfn {
+    #[must_use]
     pub const fn new(pfn: u64) -> Self {
         Self(pfn)
     }
 
+    #[must_use]
     pub const fn u64(&self) -> u64 {
         self.0
     }
 
+    #[must_use]
     pub const fn gpa(&self) -> Gpa {
         Gpa::from_pfn(*self)
     }
 
+    #[must_use]
     pub const fn gpa_with_offset(&self, offset: u64) -> Gpa {
         Gpa::from_pfn_with_offset(*self, offset)
     }
@@ -105,6 +161,7 @@ impl Pxe {
     /// assert_eq!(pxe.pfn.u64(), 0x6d600);
     /// # }
     /// ```
+    #[must_use]
     pub fn new(pfn: Pfn, flags: PxeFlags) -> Self {
         Self { pfn, flags }
     }
@@ -128,8 +185,9 @@ impl Pxe {
     /// assert!(!np.present());
     /// # }
     /// ```
+    #[must_use]
     pub fn present(&self) -> bool {
-        self.flags.contains(PxeFlags::Present)
+        self.flags.present()
     }
 
     /// Is it a large page?
@@ -151,8 +209,9 @@ impl Pxe {
     /// assert!(!np.large_page());
     /// # }
     /// ```
+    #[must_use]
     pub fn large_page(&self) -> bool {
-        self.flags.contains(PxeFlags::LargePage)
+        self.flags.large_page()
     }
 
     /// Is it a transition PTE?
@@ -168,8 +227,9 @@ impl Pxe {
     /// assert!(!np.transition());
     /// # }
     /// ```
+    #[must_use]
     pub fn transition(&self) -> bool {
-        !self.present() && self.flags.contains(PxeFlags::Transition)
+        !self.present() && self.flags.transition()
     }
 
     /// Is the memory described by this [`Pxe`] writable?
@@ -185,8 +245,9 @@ impl Pxe {
     /// assert!(!ro.writable());
     /// # }
     /// ```
+    #[must_use]
     pub fn writable(&self) -> bool {
-        self.flags.contains(PxeFlags::Writable)
+        self.flags.writable()
     }
 
     /// Is the memory described by this [`Pxe`] executable?
@@ -202,8 +263,9 @@ impl Pxe {
     /// assert!(!nx.executable());
     /// # }
     /// ```
+    #[must_use]
     pub fn executable(&self) -> bool {
-        !self.flags.contains(PxeFlags::NoExecute)
+        !self.flags.no_execute()
     }
 
     /// Is the memory described by this [`Pxe`] accessible by user-mode?
@@ -219,8 +281,9 @@ impl Pxe {
     /// assert!(!s.user_accessible());
     /// # }
     /// ```
+    #[must_use]
     pub fn user_accessible(&self) -> bool {
-        self.flags.contains(PxeFlags::UserAccessible)
+        self.flags.user_accessible()
     }
 }
 
@@ -240,7 +303,7 @@ impl From<u64> for Pxe {
     /// ```
     fn from(value: u64) -> Self {
         let pfn = Pfn::new((value >> 12) & 0xf_ffff_ffff);
-        let flags = PxeFlags::from_bits(value & PxeFlags::all().bits()).expect("PxeFlags");
+        let flags = PxeFlags::new(value);
 
         Self::new(pfn, flags)
     }
@@ -265,6 +328,6 @@ impl From<Pxe> for u64 {
     fn from(pxe: Pxe) -> Self {
         debug_assert!(pxe.pfn.u64() <= 0xf_ffff_ffffu64);
 
-        pxe.flags.bits() | (pxe.pfn.u64() << 12u64)
+        *pxe.flags | (pxe.pfn.u64() << 12u64)
     }
 }

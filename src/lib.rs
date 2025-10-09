@@ -1,4 +1,5 @@
 // Axel '0vercl0k' Souchet - February 25 2024
+#![allow(clippy::doc_markdown)]
 #![doc = include_str!("../README.md")]
 mod bits;
 mod error;

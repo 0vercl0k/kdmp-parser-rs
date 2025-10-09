@@ -1,10 +1,11 @@
 // Axel '0vercl0k' Souchet - July 18 2023
 //! This implements logic that allows to memory map a file on both
 //! Unix and Windows (cf [`memory_map_file`] / [`unmap_memory_mapped_file`]).
-use std::fmt::Debug;
-use std::io::{Read, Seek};
+use std::fmt::{self, Debug};
+use std::fs::File;
+use std::io;
+use std::io::{Cursor, Read, Seek};
 use std::path::Path;
-use std::{fs, io, ptr, slice};
 
 pub trait Reader: Read + Seek {}
 
@@ -14,11 +15,11 @@ impl<T> Reader for T where T: Read + Seek {}
 /// mapping and a cursor to be able to access the region.
 pub struct MappedFileReader<'map> {
     mapped_file: &'map [u8],
-    cursor: io::Cursor<&'map [u8]>,
+    cursor: Cursor<&'map [u8]>,
 }
 
 impl Debug for MappedFileReader<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MappedFileReader").finish()
     }
 }
@@ -27,14 +28,14 @@ impl MappedFileReader<'_> {
     /// Create a new [`MappedFileReader`] from a path using a memory map.
     pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
         // Open the file..
-        let file = fs::File::open(path)?;
+        let file = File::open(path)?;
 
         // ..and memory map it using the underlying OS-provided APIs.
-        let mapped_file = memory_map_file(file)?;
+        let mapped_file = memory_map_file(&file)?;
 
         Ok(Self {
             mapped_file,
-            cursor: io::Cursor::new(mapped_file),
+            cursor: Cursor::new(mapped_file),
         })
     }
 }
@@ -55,19 +56,19 @@ impl Seek for MappedFileReader<'_> {
 /// need to drop the mapping using OS-provided APIs.
 impl Drop for MappedFileReader<'_> {
     fn drop(&mut self) {
-        unmap_memory_mapped_file(self.mapped_file).expect("failed to unmap")
+        unmap_memory_mapped_file(self.mapped_file).expect("failed to unmap");
     }
 }
 
 #[cfg(windows)]
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
-/// Module that implements memory mapping on Windows using CreateFileMappingA /
-/// MapViewOfFile.
+/// Module that implements memory mapping on Windows using `CreateFileMappingA`
+/// / `MapViewOfFile`.
 mod windows {
+    use std::fs::File;
     use std::os::windows::prelude::AsRawHandle;
     use std::os::windows::raw::HANDLE;
-
-    use super::*;
+    use std::{io, ptr, slice};
 
     const PAGE_READONLY: DWORD = 2;
     const FILE_MAP_READ: DWORD = 4;
@@ -117,7 +118,7 @@ mod windows {
     }
 
     /// Memory map a file into memory.
-    pub fn memory_map_file<'map>(file: fs::File) -> Result<&'map [u8], io::Error> {
+    pub fn memory_map_file<'map>(file: &File) -> Result<&'map [u8], io::Error> {
         // Grab the underlying HANDLE.
         let file_handle = file.as_raw_handle();
 
@@ -161,9 +162,7 @@ mod windows {
         }
 
         // Make sure the size is not bigger than what [`slice::from_raw_parts`] wants.
-        if size > isize::MAX.try_into().unwrap() {
-            panic!("slice is too large");
-        }
+        assert!(size <= isize::MAX.try_into().unwrap(), "slice is too large");
 
         // Create the slice over the mapping.
         // SAFETY: This is safe because:
@@ -191,14 +190,14 @@ mod windows {
 }
 
 #[cfg(windows)]
-use windows::*;
+use windows::{memory_map_file, unmap_memory_mapped_file};
 
 #[cfg(unix)]
 /// Module that implements memory mapping on Unix using the mmap syscall.
 mod unix {
+    use std::fs::File;
     use std::os::fd::AsRawFd;
-
-    use super::*;
+    use std::{io, ptr, slice};
 
     const PROT_READ: i32 = 1;
     const MAP_SHARED: i32 = 1;
@@ -217,7 +216,7 @@ mod unix {
         fn munmap(addr: *const u8, length: usize) -> i32;
     }
 
-    pub fn memory_map_file<'map>(file: fs::File) -> Result<&'map [u8], io::Error> {
+    pub fn memory_map_file<'map>(file: &File) -> Result<&'map [u8], io::Error> {
         // Grab the underlying file descriptor.
         let file_fd = file.as_raw_fd();
 

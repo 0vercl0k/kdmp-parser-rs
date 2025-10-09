@@ -16,9 +16,11 @@ use std::ops::RangeInclusive;
 /// Utility trait to make it easier to extract ranges of bits.
 pub trait Bits: Sized {
     /// Get a range of bits.
+    #[must_use]
     fn bits(&self, r: RangeInclusive<usize>) -> Self;
 
     /// Get a bit.
+    #[must_use]
     fn bit(&self, n: usize) -> Self {
         self.bits(n..=n)
     }

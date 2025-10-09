@@ -13,7 +13,7 @@
 //! let page_aligned_gva = gva.page_align();
 //! let page_offset = gva.offset();
 //! ```
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::num::ParseIntError;
 use std::ops::AddAssign;
 use std::str::FromStr;
@@ -33,16 +33,19 @@ pub trait Gxa: Sized + Default + Copy + From<u64> {
     }
 
     /// Is it page aligned?
+    #[must_use]
     fn page_aligned(&self) -> bool {
         self.offset() == 0
     }
 
     /// Page-align it.
+    #[must_use]
     fn page_align(&self) -> Self {
         Self::from(self.u64() & !0xf_ff)
     }
 
     /// Get the next aligned page.
+    #[must_use]
     fn next_aligned_page(self) -> Self {
         Self::from(
             self.page_align()
@@ -84,6 +87,7 @@ impl Gpa {
     /// let gpa = Gpa::new(1337);
     /// # }
     /// ```
+    #[must_use]
     pub const fn new(addr: u64) -> Self {
         Self(addr)
     }
@@ -99,6 +103,7 @@ impl Gpa {
     /// assert_eq!(gpa.u64(), 0x1337_000);
     /// # }
     /// ```
+    #[must_use]
     pub const fn from_pfn(pfn: Pfn) -> Self {
         Self(pfn.u64() << (4 * 3))
     }
@@ -115,6 +120,7 @@ impl Gpa {
     /// assert_eq!(gpa.u64(), 0x1337_011);
     /// # }
     /// ```
+    #[must_use]
     pub const fn from_pfn_with_offset(pfn: Pfn, offset: u64) -> Self {
         let base = pfn.u64() << (4 * 3);
 
@@ -132,6 +138,7 @@ impl Gpa {
     /// assert_eq!(gpa.pfn(), 0x1337);
     /// # }
     /// ```
+    #[must_use]
     pub const fn pfn(&self) -> u64 {
         self.0 >> (4 * 3)
     }
@@ -140,7 +147,7 @@ impl Gpa {
 /// Operator += for [`Gpa`].
 impl AddAssign for Gpa {
     fn add_assign(&mut self, rhs: Self) {
-        self.0 += rhs.0
+        self.0 += rhs.0;
     }
 }
 
@@ -222,7 +229,7 @@ impl From<&Gpa> for u64 {
 
 /// Format a [`Gpa`] as a string.
 impl Display for Gpa {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "GPA:{:#x}", self.0)
     }
 }
@@ -272,6 +279,7 @@ impl Gva {
     /// let gva = Gva::new(0xdeadbeef);
     /// # }
     /// ```
+    #[must_use]
     pub const fn new(addr: u64) -> Self {
         Self(addr)
     }
@@ -290,6 +298,7 @@ impl Gva {
     /// # }
     /// ```
     #[allow(clippy::erasing_op, clippy::identity_op)]
+    #[must_use]
     pub const fn pte_idx(&self) -> u64 {
         (self.0 >> (12 + (9 * 0))) & 0b1_1111_1111
     }
@@ -308,6 +317,7 @@ impl Gva {
     /// # }
     /// ```
     #[allow(clippy::identity_op)]
+    #[must_use]
     pub const fn pde_idx(&self) -> u64 {
         (self.0 >> (12 + (9 * 1))) & 0b1_1111_1111
     }
@@ -325,6 +335,7 @@ impl Gva {
     /// assert_eq!(second.pdpe_idx(), 0x88);
     /// # }
     /// ```
+    #[must_use]
     pub const fn pdpe_idx(&self) -> u64 {
         (self.0 >> (12 + (9 * 2))) & 0b1_1111_1111
     }
@@ -342,6 +353,7 @@ impl Gva {
     /// assert_eq!(second.pml4e_idx(), 0x22);
     /// # }
     /// ```
+    #[must_use]
     pub fn pml4e_idx(&self) -> u64 {
         (self.0 >> (12 + (9 * 3))) & 0b1_1111_1111
     }
@@ -350,7 +362,7 @@ impl Gva {
 /// Operator += for [`Gva`].
 impl AddAssign for Gva {
     fn add_assign(&mut self, rhs: Self) {
-        self.0 += rhs.0
+        self.0 += rhs.0;
     }
 }
 

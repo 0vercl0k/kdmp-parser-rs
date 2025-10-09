@@ -4,8 +4,9 @@ use core::slice;
 use std::cell::RefCell;
 use std::cmp::min;
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::fs::File;
+use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::path::Path;
 use std::{io, mem};
@@ -68,6 +69,7 @@ impl VirtTranslationDetails {
         }
     }
 
+    #[must_use]
     pub fn gpa(&self) -> Gpa {
         self.pfn.gpa_with_offset(self.offset)
     }
@@ -107,8 +109,8 @@ macro_rules! impl_checked_add {
 
 impl_checked_add!(u32, u64);
 
-/// Walk a LIST_ENTRY of LdrDataTableEntry. It is used to dump both the user &
-/// driver / module lists.
+/// Walk a `LIST_ENTRY` of `LdrDataTableEntry`. It is used to dump both the user
+/// & driver / module lists.
 fn try_read_module_map<P>(parser: &mut KernelDumpParser, head: Gva) -> Result<Option<ModuleMap>>
 where
     P: PtrSize,
@@ -389,10 +391,10 @@ pub struct KernelDumpParser {
 }
 
 impl Debug for KernelDumpParser {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KernelDumpParser")
             .field("dump_type", &self.dump_type)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -428,8 +430,8 @@ impl KernelDumpParser {
             headers,
             physmem,
             reader,
-            kernel_modules: Default::default(),
-            user_modules: Default::default(),
+            kernel_modules: HashMap::default(),
+            user_modules: HashMap::default(),
         };
 
         // Extract the kernel modules if we can. If it fails because of a memory
@@ -468,22 +470,19 @@ impl KernelDumpParser {
     }
 
     pub fn new(dump_path: impl AsRef<Path>) -> Result<Self> {
+        const FOUR_GIGS: u64 = 1_024 * 1_024 * 1_024 * 4;
         // We'll assume that if you are opening a dump file larger than 4gb, you don't
         // want it memory mapped.
         let size = dump_path.as_ref().metadata()?.len();
-        const FOUR_GIGS: u64 = 1_024 * 1_024 * 1_024 * 4;
 
-        match size {
-            0..=FOUR_GIGS => {
-                let mapped_file = MappedFileReader::new(dump_path.as_ref())?;
+        if let 0..=FOUR_GIGS = size {
+            let mapped_file = MappedFileReader::new(dump_path.as_ref())?;
 
-                Self::with_reader(mapped_file)
-            }
-            _ => {
-                let file = File::open(dump_path)?;
+            Self::with_reader(mapped_file)
+        } else {
+            let file = File::open(dump_path)?;
 
-                Self::with_reader(file)
-            }
+            Self::with_reader(file)
         }
     }
 
@@ -555,7 +554,7 @@ impl KernelDumpParser {
             // So let's figure out the maximum amount of bytes we can read off this page.
             // Either, we read it until its end, or we stop if the user wants us to read
             // less.
-            let left_in_page = (PageKind::Normal.size() - gpa.offset()) as usize;
+            let left_in_page = usize::try_from(PageKind::Normal.size() - gpa.offset()).unwrap();
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
@@ -595,10 +594,10 @@ impl KernelDumpParser {
 
     /// Read a `T` from physical memory.
     pub fn phys_read_struct<T>(&self, gpa: Gpa) -> Result<T> {
-        let mut t = mem::MaybeUninit::uninit();
-        let size_of_t = mem::size_of_val(&t);
+        let mut t: MaybeUninit<T> = MaybeUninit::uninit();
+        let size_of_t = size_of_val(&t);
         let slice_over_t =
-            unsafe { slice::from_raw_parts_mut(t.as_mut_ptr() as *mut u8, size_of_t) };
+            unsafe { slice::from_raw_parts_mut(t.as_mut_ptr().cast::<u8>(), size_of_t) };
 
         self.phys_read_exact(gpa, slice_over_t)?;
 
@@ -612,6 +611,7 @@ impl KernelDumpParser {
 
     /// Translate a [`Gva`] into a [`Gpa`] using a specific directory table base
     /// / set of page tables.
+    #[allow(clippy::similar_names)]
     pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<VirtTranslationDetails> {
         // Aligning in case PCID bits are set (bits 11:0)
         let pml4_base = dtb.page_align();
@@ -630,7 +630,7 @@ impl KernelDumpParser {
 
         // huge pages:
         // 7 (PS) - Page size; must be 1 (otherwise, this entry references a page
-        // directory; see Table 4-1
+        // directory; see Table 4-1.
         let pd_base = pdpte.pfn.gpa();
         if pdpte.large_page() {
             return Ok(VirtTranslationDetails::new(&[pml4e, pdpte], gva));
@@ -644,7 +644,7 @@ impl KernelDumpParser {
 
         // large pages:
         // 7 (PS) - Page size; must be 1 (otherwise, this entry references a page
-        // table; see Table 4-18
+        // table; see Table 4-18.
         let pt_base = pde.pfn.gpa();
         if pde.large_page() {
             return Ok(VirtTranslationDetails::new(&[pml4e, pdpte, pde], gva));
@@ -695,7 +695,8 @@ impl KernelDumpParser {
 
             // We need to take care of reads that straddle different virtual memory pages.
             // First, figure out the maximum amount of bytes we can read off this page.
-            let left_in_page = (translation.page_kind.size() - translation.offset) as usize;
+            let left_in_page =
+                usize::try_from(translation.page_kind.size() - translation.offset).unwrap();
             // Then, either we read it until its end, or we stop before if we can get by
             // with less.
             let amount_wanted = min(amount_left, left_in_page);
@@ -789,10 +790,10 @@ impl KernelDumpParser {
     /// Read a `T` from virtual memory using a specific directory table base /
     /// set of page tables.
     pub fn virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<T> {
-        let mut t = mem::MaybeUninit::uninit();
-        let size_of_t = mem::size_of_val(&t);
+        let mut t: MaybeUninit<T> = MaybeUninit::uninit();
+        let size_of_t = size_of_val(&t);
         let slice_over_t =
-            unsafe { slice::from_raw_parts_mut(t.as_mut_ptr() as *mut u8, size_of_t) };
+            unsafe { slice::from_raw_parts_mut(t.as_mut_ptr().cast::<u8>(), size_of_t) };
 
         self.virt_read_exact_with_dtb(gva, slice_over_t, dtb)?;
 
@@ -850,11 +851,11 @@ impl KernelDumpParser {
 
         let mut buffer = vec![0; unicode_str.length.into()];
         match self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb) {
-            Ok(_) => {}
+            Ok(()) => {}
             // If we encountered a memory translation error, we don't consider this a failure.
             Err(KdmpParserError::AddrTranslation(_)) => return Ok(None),
             Err(e) => return Err(e),
-        };
+        }
 
         let n = unicode_str.length / 2;
 
@@ -869,17 +870,17 @@ impl KernelDumpParser {
     /// physical pages starting at a `PFN`. This means that you can have
     /// "holes" in the physical address space and you don't need to write any
     /// data for them. Here is a small example:
-    ///   - Run[0]: BasePage = 1_337, PageCount = 2
-    ///   - Run[1]: BasePage = 1_400, PageCount = 1
+    ///   - `Run[0]`: `BasePage = 1_337`, `PageCount = 2`
+    ///   - `Run[1]`: `BasePage = 1_400`, `PageCount = 1`
     ///
-    /// In the above, there is a "hole" between the two runs. It has 2+1 memory
-    /// pages at: Pfn(1_337+0), Pfn(1_337+1) and Pfn(1_400+0) (but nothing
-    /// at Pfn(1_339)).
+    /// In the above, there is a "hole" between the two runs. It has `2+1`
+    /// memory pages at: `Pfn(1_337+0)`, `Pfn(1_337+1)` and `Pfn(1_400+0)`
+    /// (but nothing at `Pfn(1_339)`).
     ///
     /// In terms of the content of those physical memory pages, they are packed
     /// and stored one after another. If the first page of the first run is
-    /// at file offset 0x2_000, then the first page of the second run is at
-    /// file offset 0x2_000+(2*0x1_000).
+    /// at file offset `0x2_000`, then the first page of the second run is at
+    /// file offset `0x2_000+(2*0x1_000)`.
     fn full_physmem(headers: &Header64, reader: &mut impl Reader) -> Result<PhysmemMap> {
         let mut page_offset = reader.stream_position()?;
         let mut run_cursor = io::Cursor::new(headers.physical_memory_block_buffer);

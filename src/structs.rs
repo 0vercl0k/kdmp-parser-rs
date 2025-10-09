@@ -2,7 +2,9 @@
 //! This has all the raw structures that makes up Windows kernel crash-dumps.
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::{io, mem, slice};
+use std::io::SeekFrom;
+use std::mem::MaybeUninit;
+use std::slice;
 
 use crate::error::Result;
 use crate::{Gpa, KdmpParserError, Reader};
@@ -20,6 +22,7 @@ pub enum PageKind {
 
 impl PageKind {
     /// Size in bytes of the page.
+    #[must_use]
     pub fn size(&self) -> u64 {
         match self {
             Self::Normal => 4 * 1_024,
@@ -29,6 +32,7 @@ impl PageKind {
     }
 
     /// Extract the page offset of `addr`.
+    #[must_use]
     pub fn page_offset(&self, addr: u64) -> u64 {
         let mask = self.size() - 1;
 
@@ -40,12 +44,12 @@ impl PageKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u32)]
 pub enum DumpType {
-    // Old dump types from dbgeng.dll
+    // Old dump types from `dbgeng.dll`.
     Full = 0x1,
     Bmp = 0x5,
     /// Produced by `.dump /m`.
     // Mini = 0x4,
-    /// (22H2+) Produced by TaskMgr > System > Create live kernel Memory Dump.
+    /// (22H2+) Produced by `TaskMgr > System > Create live kernel Memory Dump`.
     LiveKernelMemory = 0x6,
     /// Produced by `.dump /k`.
     KernelMemory = 0x8,
@@ -163,7 +167,7 @@ impl Debug for Header64 {
             .field("kd_secondary_version", &self.kd_secondary_version)
             .field("attributes", &self.attributes)
             .field("boot_id", &self.boot_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -183,13 +187,13 @@ pub struct BmpHeader64 {
     //    )]],
     // # The offset of the first page in the file.
     // 'FirstPage': [0x20, ['unsigned long long']],
-    padding1: [u8; 0x20 - (0x4 + mem::size_of::<u32>())],
+    padding1: [u8; 0x20 - (0x4 + size_of::<u32>())],
     /// The offset of the first page in the file.
     pub first_page: u64,
     /// Total number of pages present in the bitmap.
     pub total_present_pages: u64,
     /// Total number of pages in image. This dictates the total size of the
-    /// bitmap.This is not the same as the TotalPresentPages which is only
+    /// bitmap. This is not the same as the `TotalPresentPages` which is only
     /// the sum of the bits set to 1.
     pub pages: u64,
     // Bitmap follows
@@ -237,7 +241,7 @@ impl TryFrom<&[u8]> for PhysmemDesc {
     type Error = KdmpParserError;
 
     fn try_from(slice: &[u8]) -> Result<Self> {
-        let expected_len = mem::size_of::<Self>();
+        let expected_len = size_of::<Self>();
         if slice.len() < expected_len {
             return Err(KdmpParserError::InvalidData("physmem desc is too small"));
         }
@@ -379,19 +383,19 @@ impl Debug for Context {
             .field("last_branch_from_rip", &self.last_branch_from_rip)
             .field("last_exception_to_rip", &self.last_exception_to_rip)
             .field("last_exception_from_rip", &self.last_exception_from_rip)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 /// Peek for a `T` from the cursor.
 pub fn peek_struct<T>(reader: &mut impl Reader) -> Result<T> {
-    let mut s = mem::MaybeUninit::uninit();
-    let size_of_s = mem::size_of_val(&s);
-    let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr() as *mut u8, size_of_s) };
+    let mut s: MaybeUninit<T> = MaybeUninit::uninit();
+    let size_of_s = size_of_val(&s);
+    let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr().cast::<u8>(), size_of_s) };
 
     let pos = reader.stream_position()?;
     reader.read_exact(slice_over_s)?;
-    reader.seek(io::SeekFrom::Start(pos))?;
+    reader.seek(SeekFrom::Start(pos))?;
 
     Ok(unsafe { s.assume_init() })
 }
@@ -399,9 +403,9 @@ pub fn peek_struct<T>(reader: &mut impl Reader) -> Result<T> {
 /// Read a `T` from the cursor.
 pub fn read_struct<T>(reader: &mut impl Reader) -> Result<T> {
     let s = peek_struct(reader)?;
-    let size_of_s = mem::size_of_val(&s);
+    let size_of_s = size_of_val(&s);
 
-    reader.seek(io::SeekFrom::Current(size_of_s.try_into().unwrap()))?;
+    reader.seek(SeekFrom::Current(size_of_s.try_into().unwrap()))?;
 
     Ok(s)
 }
@@ -520,18 +524,18 @@ pub struct KdDebuggerData64 {
     pub header: DbgKdDebugDataHeader64,
     /// Base address of kernel image
     pub kern_base: u64,
-    /// DbgBreakPointWithStatus is a function which takes an argument
-    /// and hits a breakpoint.  This field contains the address of the
-    /// breakpoint instruction.  When the debugger sees a breakpoint
+    /// `DbgBreakPointWithStatus` is a function which takes an argument
+    /// and hits a breakpoint. This field contains the address of the
+    /// breakpoint instruction. When the debugger sees a breakpoint
     /// at this address, it may retrieve the argument from the first
     /// argument register, or on x86 the eax register.
     pub breakpoint_with_status: u64,
     /// Address of the saved context record during a bugcheck
-    /// N.B. This is an automatic in KeBugcheckEx's frame, and
+    /// N.B. This is an automatic in `KeBugcheckEx`'s frame, and
     /// is only valid after a bugcheck.
     pub saved_context: u64,
     /// The address of the thread structure is provided in the
-    /// WAIT_STATE_CHANGE packet.  This is the offset from the base of
+    /// `WAIT_STATE_CHANGE` packet.  This is the offset from the base of
     /// the thread structure to the pointer to the kernel stack frame
     /// for the currently active usermode callback.
     pub th_callback_stack: u16,
