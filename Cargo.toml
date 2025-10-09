@@ -24,3 +24,6 @@ serde_json = "1.0"
 
 [[example]]
 name = "parser"
+
+[lints.clippy]
+pedantic = "warn"
