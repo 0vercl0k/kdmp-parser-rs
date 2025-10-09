@@ -6,6 +6,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::fs::File;
+use std::io::SeekFrom;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::path::Path;
@@ -46,6 +47,11 @@ pub struct VirtTranslationDetails {
 }
 
 impl VirtTranslationDetails {
+    /// Create a new instance from a slice of PXEs and the original GVA.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pxes` is malformed (i.e. not between 2 and 4 entries).
     pub fn new(pxes: &[Pxe], gva: Gva) -> Self {
         let writable = pxes.iter().all(Pxe::writable);
         let executable = pxes.iter().all(Pxe::executable);
@@ -399,8 +405,12 @@ impl Debug for KernelDumpParser {
 }
 
 impl KernelDumpParser {
-    /// Create an instance from a file path. This memory maps the file and
-    /// parses it.
+    /// Create an instance from a [`Reader`] & parse the file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump is malformed or if we encounter an I/O
+    /// error.
     pub fn with_reader(mut reader: impl Reader + 'static) -> Result<Self> {
         // Parse the dump header and check if things look right.
         let headers = Box::new(read_struct::<Header64>(&mut reader)?);
@@ -441,7 +451,7 @@ impl KernelDumpParser {
         }
 
         // Now let's try to find out user-modules. For that we need the
-        // KDDEBUGGER_DATA_BLOCK structure to know where a bunch of things are.
+        // `KDDEBUGGER_DATA_BLOCK` structure to know where a bunch of things are.
         // If we can't read the block, we'll have to stop the adventure here as we won't
         // be able to read the things we need to keep going.
         let Some(kd_debugger_data_block) = parser.try_virt_read_struct::<KdDebuggerData64>(
@@ -469,6 +479,12 @@ impl KernelDumpParser {
         Ok(parser)
     }
 
+    /// Create an instance from a file path; depending on the file size, it'll
+    /// either memory maps it or open it as a regular file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file can't be memory mapped or opened.
     pub fn new(dump_path: impl AsRef<Path>) -> Result<Self> {
         const FOUR_GIGS: u64 = 1_024 * 1_024 * 1_024 * 4;
         // We'll assume that if you are opening a dump file larger than 4gb, you don't
@@ -525,7 +541,13 @@ impl KernelDumpParser {
 
     /// Translate a [`Gpa`] into a file offset of where the content of the page
     /// resides in.
-    pub fn phys_translate(&self, gpa: Gpa) -> Result<u64> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `gpa` has no backing page or if an integer
+    /// overflow is triggered while calculating where in the input file the
+    /// backing page is at.
+    pub fn phys_translate(&self, gpa: Gpa) -> Result<SeekFrom> {
         let offset = *self
             .physmem
             .get(&gpa.page_align())
@@ -533,6 +555,7 @@ impl KernelDumpParser {
 
         offset
             .checked_add(gpa.offset())
+            .map(SeekFrom::Start)
             .ok_or(KdmpParserError::Overflow("w/ gpa offset"))
     }
 
@@ -549,7 +572,7 @@ impl KernelDumpParser {
             // Translate the gpa into a file offset..
             let phy_offset = self.phys_translate(addr)?;
             // ..and seek the reader there.
-            self.seek(io::SeekFrom::Start(phy_offset))?;
+            self.seek(phy_offset)?;
             // We need to take care of reads that straddle different physical memory pages.
             // So let's figure out the maximum amount of bytes we can read off this page.
             // Either, we read it until its end, or we stop if the user wants us to read
@@ -683,14 +706,10 @@ impl KernelDumpParser {
             // occured if we already have read some bytes.
             let translation = match self.virt_translate_with_dtb(addr, dtb) {
                 Ok(tr) => tr,
-                Err(e) => {
-                    if total_read > 0 {
-                        // If we already read some bytes, return how many we read.
-                        return Ok(total_read);
-                    }
-
-                    return Err(e);
-                }
+                // If we already read some bytes, return how many we read..
+                Err(_) if total_read > 0 => return Ok(total_read),
+                // ..otherwise this is an error.
+                Err(e) => return Err(e),
             };
 
             // We need to take care of reads that straddle different virtual memory pages.
@@ -800,7 +819,7 @@ impl KernelDumpParser {
         Ok(unsafe { t.assume_init() })
     }
 
-    /// Try to read a `T` from virtual memory . If a memory translation error
+    /// Try to read a `T` from virtual memory. If a memory translation error
     /// occurs, it'll return `None` instead of an error.
     pub fn try_virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
         self.try_virt_read_struct_with_dtb::<T>(gva, Gpa::new(self.headers.directory_table_base))
@@ -813,10 +832,20 @@ impl KernelDumpParser {
         filter_addr_translation_err(self.virt_read_struct_with_dtb::<T>(gva, dtb))
     }
 
+    /// Seek to `pos`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be seeked to `pos`.
     pub fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
         Ok(self.reader.borrow_mut().seek(pos)?)
     }
 
+    /// Read however many bytes in `buf` and returns the amount of bytes read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if it encountered any kind of I/O error.
     pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
         Ok(self.reader.borrow_mut().read(buf)?)
     }

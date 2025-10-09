@@ -26,7 +26,7 @@ pub enum AddrTranslationError {
 impl Error for AddrTranslationError {}
 
 impl Display for AddrTranslationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AddrTranslationError::Virt(gva, not_pres) => {
                 write!(f, "virt to phys translation of {gva}: {not_pres:?}")

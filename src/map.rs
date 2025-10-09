@@ -3,8 +3,7 @@
 //! Unix and Windows (cf [`memory_map_file`] / [`unmap_memory_mapped_file`]).
 use std::fmt::{self, Debug};
 use std::fs::File;
-use std::io;
-use std::io::{Cursor, Read, Seek};
+use std::io::{self, Cursor, Read, Seek};
 use std::path::Path;
 
 pub trait Reader: Read + Seek {}
@@ -26,6 +25,10 @@ impl Debug for MappedFileReader<'_> {
 
 impl MappedFileReader<'_> {
     /// Create a new [`MappedFileReader`] from a path using a memory map.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be opened or memory mapped.
     pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
         // Open the file..
         let file = File::open(path)?;
@@ -233,9 +236,7 @@ mod unix {
         }
 
         // Make sure the size is not bigger than what [`slice::from_raw_parts`] wants.
-        if size > isize::MAX.try_into().unwrap() {
-            panic!("slice is too large");
-        }
+        assert!(size <= isize::MAX.try_into().unwrap(), "slice is too large");
 
         // Create the slice over the mapping.
         // SAFETY: This is safe because:
@@ -263,7 +264,7 @@ mod unix {
 }
 
 #[cfg(unix)]
-use unix::*;
+use unix::{memory_map_file, unmap_memory_mapped_file};
 
 #[cfg(not(any(windows, unix)))]
 /// Your system hasn't been implemented; if you do it, send a PR!
