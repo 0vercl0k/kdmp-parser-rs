@@ -6,7 +6,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use kdmp_parser::{
-    AddrTranslationError, Gpa, Gva, KdmpParserError, KernelDumpParser, PageKind, PxeNotPresent,
+    Gpa, Gva, KdmpParserError, KernelDumpParser, MemoryReadError, PageKind, PageReadError, PxeKind,
 };
 use serde::Deserialize;
 
@@ -472,17 +472,17 @@ fn regressions() {
     let parser = KernelDumpParser::new(&kernel_dump.file).unwrap();
     let mut buffer = [0];
     assert!(matches!(
-        parser.virt_read(0x1a42ea30240.into(), &mut buffer),
-        Err(KdmpParserError::AddrTranslation(
-            AddrTranslationError::Phys(gpa)
-        )) if gpa == 0x166b7240.into()
+        parser.virt_read_strict(0x1a42ea30240.into(), &mut buffer),
+        Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+            PageReadError::NotInDump { gpa, .. }
+        ))) if gpa == 0x166b7240.into()
     ));
 
     assert!(matches!(
-        parser.virt_read(0x16e23fa060.into(), &mut buffer),
-        Err(KdmpParserError::AddrTranslation(
-            AddrTranslationError::Phys(gpa)
-        )) if gpa == 0x1bc4060.into()
+        parser.virt_read_strict(0x16e23fa060.into(), &mut buffer),
+        Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+            PageReadError::NotInDump { gpa, .. }
+        ))) if gpa == 0x1bc4060.into()
     ));
 
     // BUG: https://github.com/0vercl0k/kdmp-parser-rs/issues/10
@@ -510,12 +510,16 @@ fn regressions() {
     // fffff803`f308700f  ?? ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  ????????????????
     // ```
     let mut buffer = [0; 32];
-    assert_eq!(
-        parser
-            .virt_read(0xfffff803f3086fef.into(), &mut buffer)
-            .unwrap(),
-        17
-    );
+    match parser.virt_read_strict(0xfffff803f3086fef.into(), &mut buffer) {
+        Err(KdmpParserError::MemoryRead(MemoryReadError::PartialRead {
+            expected_amount: 32,
+            actual_amount: 17,
+            ..
+        })) => {
+            // This is correct - we read 17 bytes before hitting unmapped memory
+        }
+        other => panic!("Expected PartialRead with actual_amount 17, got: {other:?}"),
+    }
 
     // ```text
     // kd> !process 0 0
@@ -678,16 +682,16 @@ fn regressions() {
     let gva = 0.into();
     assert!(matches!(
         parser.virt_translate(gva),
-        Err(KdmpParserError::AddrTranslation(
-            AddrTranslationError::Virt(fault_gva, PxeNotPresent::Pde)
-        )) if fault_gva == gva
+        Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+            PageReadError::NotPresent { gva: fault_gva, which_pxe: PxeKind::Pde }
+        ))) if fault_gva == gva
     ));
 
     let gva = 0xffffffff_ffffffff.into();
     assert!(matches!(
         parser.virt_translate(gva),
-        Err(KdmpParserError::AddrTranslation(
-            AddrTranslationError::Virt(fault_gva, PxeNotPresent::Pte)
-        )) if fault_gva == gva
+        Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+            PageReadError::NotPresent { gva: fault_gva, which_pxe: PxeKind::Pte }
+        ))) if fault_gva == gva
     ));
 }

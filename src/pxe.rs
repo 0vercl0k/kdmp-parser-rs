@@ -8,12 +8,12 @@
 //! # use kdmp_parser::{Pxe, PxeFlags, Pfn};
 //! let pxe = Pxe::new(
 //!     Pfn::new(0x6d600),
-//!     PxeFlags::UserAccessible | PxeFlags::Accessed | PxeFlags::Present
+//!     PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT
 //! );
 //! let encoded = u64::from(pxe);
 //! let decoded = Pxe::from(encoded);
 //! ```
-use std::ops::Deref;
+use std::ops::{BitOr, Deref};
 
 use crate::{Bits, Gpa};
 
@@ -22,6 +22,17 @@ use crate::{Bits, Gpa};
 pub struct PxeFlags(u64);
 
 impl PxeFlags {
+    pub const PRESENT: Self = Self(1 << 0);
+    pub const WRITABLE: Self = Self(1 << 1);
+    pub const USER_ACCESSIBLE: Self = Self(1 << 2);
+    pub const WRITE_THROUGH: Self = Self(1 << 3);
+    pub const CACHE_DISABLED: Self = Self(1 << 4);
+    pub const ACCESSED: Self = Self(1 << 5);
+    pub const DIRTY: Self = Self(1 << 6);
+    pub const LARGE_PAGE: Self = Self(1 << 7);
+    pub const TRANSITION: Self = Self(1 << 11);
+    pub const NO_EXECUTE: Self = Self(1 << 63);
+
     #[must_use]
     pub fn new(bits: u64) -> Self {
         Self(bits)
@@ -75,6 +86,14 @@ impl PxeFlags {
     #[must_use]
     pub fn no_execute(&self) -> bool {
         self.0.bit(63) != 0
+    }
+}
+
+impl BitOr for PxeFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self::new(*self | *rhs)
     }
 }
 
@@ -135,9 +154,6 @@ impl From<Pfn> for u64 {
 }
 
 /// A [`Pxe`] is a set of flags ([`PxeFlags`]) and a Page Frame Number (PFN).
-/// This representation takes more space than a regular `PXE` but it is more
-/// convenient to split the flags / the pfn as [`bitflags!`] doesn't seem to
-/// support bitfields.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Default, PartialOrd, Ord)]
 pub struct Pxe {
     /// The PFN of the next table or the final page.
@@ -156,7 +172,7 @@ impl Pxe {
     /// # fn main() {
     /// let pxe = Pxe::new(
     ///     Pfn::new(0x6d600),
-    ///     PxeFlags::UserAccessible | PxeFlags::Accessed | PxeFlags::Present
+    ///     PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT
     /// );
     /// assert_eq!(pxe.pfn.u64(), 0x6d600);
     /// # }
@@ -175,12 +191,12 @@ impl Pxe {
     /// # fn main() {
     /// let p = Pxe::new(
     ///     Pfn::new(0x6d600),
-    ///     PxeFlags::Present
+    ///     PxeFlags::PRESENT
     /// );
     /// assert!(p.present());
     /// let np = Pxe::new(
     ///     Pfn::new(0x1337),
-    ///     PxeFlags::UserAccessible
+    ///     PxeFlags::USER_ACCESSIBLE
     /// );
     /// assert!(!np.present());
     /// # }
@@ -199,12 +215,12 @@ impl Pxe {
     /// # fn main() {
     /// let p = Pxe::new(
     ///     Pfn::new(0x6d600),
-    ///     PxeFlags::LargePage
+    ///     PxeFlags::LARGE_PAGE
     /// );
     /// assert!(p.large_page());
     /// let np = Pxe::new(
     ///     Pfn::new(0x1337),
-    ///     PxeFlags::UserAccessible
+    ///     PxeFlags::USER_ACCESSIBLE
     /// );
     /// assert!(!np.large_page());
     /// # }
@@ -298,12 +314,14 @@ impl From<u64> for Pxe {
     /// # fn main() {
     /// let pxe = Pxe::from(0x6D_60_00_25);
     /// assert_eq!(pxe.pfn.u64(), 0x6d600);
-    /// assert_eq!(pxe.flags, PxeFlags::UserAccessible | PxeFlags::Accessed | PxeFlags::Present);
+    /// assert_eq!(pxe.flags, PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT);
     /// # }
     /// ```
     fn from(value: u64) -> Self {
-        let pfn = Pfn::new((value >> 12) & 0xf_ffff_ffff);
-        let flags = PxeFlags::new(value);
+        const PFN_MASK: u64 = 0xffff_ffff_f000;
+        const FLAGS_MASK: u64 = !PFN_MASK;
+        let pfn = Pfn::new((value & PFN_MASK) >> 12);
+        let flags = PxeFlags::new(value & FLAGS_MASK);
 
         Self::new(pfn, flags)
     }
@@ -320,7 +338,7 @@ impl From<Pxe> for u64 {
     /// # fn main() {
     /// let pxe = Pxe::new(
     ///     Pfn::new(0x6d600),
-    ///     PxeFlags::UserAccessible | PxeFlags::Accessed | PxeFlags::Present,
+    ///     PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT,
     /// );
     /// assert_eq!(u64::from(pxe), 0x6D_60_00_25);
     /// # }

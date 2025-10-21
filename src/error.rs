@@ -9,29 +9,117 @@ use crate::structs::{DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VA
 use crate::{Gpa, Gva};
 pub type Result<R> = std::result::Result<R, KdmpParserError>;
 
-#[derive(Debug)]
-pub enum PxeNotPresent {
+/// Identifies which page table entry level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PxeKind {
     Pml4e,
     Pdpte,
     Pde,
     Pte,
 }
 
-#[derive(Debug)]
-pub enum AddrTranslationError {
-    Virt(Gva, PxeNotPresent),
-    Phys(Gpa),
+/// Represent the fundamental reason a single page read can fail.
+#[derive(Debug, Clone)]
+pub enum PageReadError {
+    /// Virtual address translation failed because a page table entry is not
+    /// present (it exists in the dump but is marked as not present).
+    NotPresent { gva: Gva, which_pxe: PxeKind },
+    /// A physical page is missing from the dump. XXX:
+    NotInDump {
+        gva: Option<(Gva, Option<PxeKind>)>,
+        gpa: Gpa,
+    },
 }
 
-impl Error for AddrTranslationError {}
+impl Error for PageReadError {}
 
-impl Display for AddrTranslationError {
+/// Recoverable memory errors that can occur during memory reads.
+///
+/// There are several failure conditions that can happen while trying to read
+/// virtual (or physical) memory out of a crash-dump that might not be obvious.
+///
+/// For example, consider reading two 4K pages from the virtual address
+/// `0x1337_000`; it can fail because:
+/// - The virtual address (the first 4K page) isn't present in the address space
+///   at the `Pde` level: `MemoryError::PageRead(PageReadError::PageNotPresent {
+///   gva: 0x1337_000, which_pxe: PxeKind::Pde })`
+/// - The `Pde` that needs reading as part of the translation (of the first
+///   page) isn't part of the crash-dump:
+///   `MemoryError::PageRead(PageReadError::TranslationPageNotInDump { gva:
+///   0x1337_000, gpa: .., which_pxe: PxeKind::Pde })`
+/// - The physical page backing that virtual address isn't included in the
+///   crash-dump: `MemoryError::PageRead(PageReadError::BackingPageNotInDump {
+///   gva: 0x1337_000, gpa: .. })`
+/// - Reading the second (and only the second) page failed because of any of the
+///   previous reasons: `MemoryError::PartialRead { expected_amount: 8_192,
+///   actual_amount: 4_096, reason: PageReadError::PageNotPresent { .. } }`
+///
+/// Similarly, for physical memory reads starting at `0x1337_000`:
+/// - A direct physical page isn't in the crash-dump:
+///   `MemoryError::PageRead(PageReadError::PhysicalPageNotInDump { gpa:
+///   0x1337_000 })`
+/// - Reading the second page failed: `MemoryError::PartialRead {
+///   expected_amount: 8_192, actual_amount: 4_096, reason:
+///   PageReadError::PhysicalPageNotInDump { gpa: 0x1338_000 } }`
+///
+/// We consider any of those errors 'recoverable' which means that we won't even
+/// bubble those up to the callers with the regular APIs. Only the `strict`
+/// versions will.
+#[derive(Debug, Clone)]
+pub enum MemoryReadError {
+    /// A single page/read failed.
+    PageRead(PageReadError),
+    /// A read request was only partially fulfilled.
+    PartialRead {
+        expected_amount: usize,
+        actual_amount: usize,
+        reason: PageReadError,
+    },
+}
+
+impl Display for PageReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AddrTranslationError::Virt(gva, not_pres) => {
-                write!(f, "virt to phys translation of {gva}: {not_pres:?}")
+            PageReadError::NotPresent { gva, which_pxe } => {
+                write!(f, "{gva} isn't present at the {which_pxe:?} level")
             }
-            AddrTranslationError::Phys(gpa) => write!(f, "phys to offset translation of {gpa}"),
+            PageReadError::NotInDump { gva, gpa } => match gva {
+                Some((gva, Some(which_pxe))) => write!(
+                    f,
+                    "{gpa} was needed while translating {gva} at the {which_pxe:?} level but is missing from the dump)"
+                ),
+                Some((gva, None)) => write!(f, "{gpa} backs {gva} but is missing from the dump)"),
+                None => {
+                    write!(f, "{gpa} is missing from the dump)")
+                }
+            },
+        }
+    }
+}
+
+impl Error for MemoryReadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            MemoryReadError::PageRead(e) => Some(e),
+            MemoryReadError::PartialRead { reason, .. } => Some(reason),
+        }
+    }
+}
+
+impl Display for MemoryReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MemoryReadError::PageRead(_) => write!(f, "page read"),
+            MemoryReadError::PartialRead {
+                expected_amount,
+                actual_amount,
+                ..
+            } => {
+                write!(
+                    f,
+                    "partially read {actual_amount} off {expected_amount} wanted bytes"
+                )
+            }
         }
     }
 }
@@ -50,9 +138,7 @@ pub enum KdmpParserError {
     PhysAddrOverflow(u32, u64),
     PageOffsetOverflow(u32, u64),
     BitmapPageOffsetOverflow(u64, usize),
-    PartialPhysRead,
-    PartialVirtRead,
-    AddrTranslation(AddrTranslationError),
+    MemoryRead(MemoryReadError),
 }
 
 impl From<io::Error> for KdmpParserError {
@@ -67,9 +153,15 @@ impl From<FromUtf16Error> for KdmpParserError {
     }
 }
 
-impl From<AddrTranslationError> for KdmpParserError {
-    fn from(value: AddrTranslationError) -> Self {
-        KdmpParserError::AddrTranslation(value)
+impl From<MemoryReadError> for KdmpParserError {
+    fn from(value: MemoryReadError) -> Self {
+        KdmpParserError::MemoryRead(value)
+    }
+}
+
+impl From<PageReadError> for KdmpParserError {
+    fn from(value: PageReadError) -> Self {
+        Self::MemoryRead(MemoryReadError::PageRead(value))
     }
 }
 
@@ -103,9 +195,7 @@ impl Display for KdmpParserError {
                 f,
                 "overflow for page offset w/ bitmap_idx {bitmap_idx} bit_idx {bit_idx}"
             ),
-            KdmpParserError::PartialPhysRead => write!(f, "partial physical memory read"),
-            KdmpParserError::PartialVirtRead => write!(f, "partial virtual memory read"),
-            KdmpParserError::AddrTranslation(_) => write!(f, "memory translation"),
+            KdmpParserError::MemoryRead(_) => write!(f, "memory read"),
         }
     }
 }
@@ -115,7 +205,7 @@ impl Error for KdmpParserError {
         match self {
             KdmpParserError::Utf16(u) => Some(u),
             KdmpParserError::Io(e) => Some(e),
-            KdmpParserError::AddrTranslation(a) => Some(a),
+            KdmpParserError::MemoryRead(m) => Some(m),
             _ => None,
         }
     }

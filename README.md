@@ -1,7 +1,7 @@
 <div align='center'>
   <h1><code>kdmp-parser</code></h1>
   <p>
-    <strong>A <a href="https://en.wikipedia.org/wiki/KISS_principle">KISS</a> Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.</strong>
+    <strong>A <a href="https://en.wikipedia.org/wiki/KISS_principle">KISS</a>, dependency free Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.</strong>
   </p>
   <p>
     <a href="https://crates.io/crates/kdmp-parser"><img src="https://img.shields.io/crates/v/kdmp-parser.svg" /></a>

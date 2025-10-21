@@ -10,7 +10,7 @@ mod pxe;
 mod structs;
 
 pub use bits::Bits;
-pub use error::{AddrTranslationError, KdmpParserError, PxeNotPresent, Result};
+pub use error::{KdmpParserError, MemoryReadError, PageReadError, PxeKind, Result};
 pub use gxa::{Gpa, Gva, Gxa};
 pub use map::{MappedFileReader, Reader};
 pub use parse::{KernelDumpParser, VirtTranslationDetails};

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::{io, mem};
 
 use crate::bits::Bits;
-use crate::error::{PxeNotPresent, Result};
+use crate::error::{MemoryReadError, PageReadError, PxeKind, Result};
 use crate::gxa::Gxa;
 use crate::map::{MappedFileReader, Reader};
 use crate::structs::{
@@ -22,7 +22,7 @@ use crate::structs::{
     LdrDataTableEntry, ListEntry, PageKind, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun,
     UnicodeString, read_struct,
 };
-use crate::{AddrTranslationError, Gpa, Gva, KdmpParserError, Pfn, Pxe};
+use crate::{Gpa, Gva, KdmpParserError, Pfn, Pxe};
 
 /// The details related to a virtual to physical address translation.
 ///
@@ -122,7 +122,7 @@ where
     P: PtrSize,
 {
     let mut modules = ModuleMap::new();
-    let Some(entry) = parser.try_virt_read_struct::<ListEntry<P>>(head)? else {
+    let Some(entry) = parser.virt_read_struct::<ListEntry<P>>(head)? else {
         return Ok(None);
     };
 
@@ -130,18 +130,18 @@ where
     // We'll walk it until we hit the starting point (it is circular).
     while entry_addr != head {
         // Read the table entry..
-        let Some(data) = parser.try_virt_read_struct::<LdrDataTableEntry<P>>(entry_addr)? else {
+        let Some(data) = parser.virt_read_struct::<LdrDataTableEntry<P>>(entry_addr)? else {
             return Ok(None);
         };
 
         // ..and read it. We first try to read `full_dll_name` but will try
         // `base_dll_name` is we couldn't read the former.
         let Some(dll_name) = parser
-            .try_virt_read_unicode_string::<P>(&data.full_dll_name)
+            .virt_read_unicode_string::<P>(&data.full_dll_name)
             .and_then(|s| {
                 if s.is_none() {
                     // If we failed to read the `full_dll_name`, give `base_dll_name` a shot.
-                    parser.try_virt_read_unicode_string::<P>(&data.base_dll_name)
+                    parser.virt_read_unicode_string::<P>(&data.base_dll_name)
                 } else {
                     Ok(s)
                 }
@@ -181,7 +181,7 @@ fn try_find_prcb(
     let mut processor_block = kd_debugger_data_block.ki_processor_block;
     for _ in 0..parser.headers().number_processors {
         // Read the KPRCB pointer.
-        let Some(kprcb_addr) = parser.try_virt_read_struct::<u64>(processor_block.into())? else {
+        let Some(kprcb_addr) = parser.virt_read_struct::<u64>(processor_block.into())? else {
             return Ok(None);
         };
 
@@ -191,15 +191,13 @@ fn try_find_prcb(
             .ok_or(KdmpParserError::Overflow("offset_prcb"))?;
 
         // ..and read it.
-        let Some(kprcb_context_addr) =
-            parser.try_virt_read_struct::<u64>(kprcb_context_addr.into())?
+        let Some(kprcb_context_addr) = parser.virt_read_struct::<u64>(kprcb_context_addr.into())?
         else {
             return Ok(None);
         };
 
         // Read the context..
-        let Some(kprcb_context) =
-            parser.try_virt_read_struct::<Context>(kprcb_context_addr.into())?
+        let Some(kprcb_context) = parser.virt_read_struct::<Context>(kprcb_context_addr.into())?
         else {
             return Ok(None);
         };
@@ -233,7 +231,7 @@ fn try_extract_user_modules(
         .u64()
         .checked_add(kd_debugger_data_block.offset_prcb_current_thread.into())
         .ok_or(KdmpParserError::Overflow("offset prcb current thread"))?;
-    let Some(kthread_addr) = parser.try_virt_read_struct::<u64>(kthread_addr.into())? else {
+    let Some(kthread_addr) = parser.virt_read_struct::<u64>(kthread_addr.into())? else {
         return Ok(None);
     };
 
@@ -241,7 +239,7 @@ fn try_extract_user_modules(
     let teb_addr = kthread_addr
         .checked_add(kd_debugger_data_block.offset_kthread_teb.into())
         .ok_or(KdmpParserError::Overflow("offset kthread teb"))?;
-    let Some(teb_addr) = parser.try_virt_read_struct::<u64>(teb_addr.into())? else {
+    let Some(teb_addr) = parser.virt_read_struct::<u64>(teb_addr.into())? else {
         return Ok(None);
     };
 
@@ -259,7 +257,7 @@ fn try_extract_user_modules(
     let peb_addr = teb_addr
         .checked_add(peb_offset)
         .ok_or(KdmpParserError::Overflow("peb offset"))?;
-    let Some(peb_addr) = parser.try_virt_read_struct::<u64>(peb_addr.into())? else {
+    let Some(peb_addr) = parser.virt_read_struct::<u64>(peb_addr.into())? else {
         return Ok(None);
     };
 
@@ -272,7 +270,7 @@ fn try_extract_user_modules(
     let peb_ldr_addr = peb_addr
         .checked_add(ldr_offset)
         .ok_or(KdmpParserError::Overflow("ldr offset"))?;
-    let Some(peb_ldr_addr) = parser.try_virt_read_struct::<u64>(peb_ldr_addr.into())? else {
+    let Some(peb_ldr_addr) = parser.virt_read_struct::<u64>(peb_ldr_addr.into())? else {
         return Ok(None);
     };
 
@@ -310,7 +308,7 @@ fn try_extract_user_modules(
     let peb32_addr = teb32_addr
         .checked_add(peb32_offset)
         .ok_or(KdmpParserError::Overflow("peb32 offset"))?;
-    let Some(peb32_addr) = parser.try_virt_read_struct::<u32>(peb32_addr.into())? else {
+    let Some(peb32_addr) = parser.virt_read_struct::<u32>(peb32_addr.into())? else {
         return Ok(Some(modules));
     };
 
@@ -323,8 +321,7 @@ fn try_extract_user_modules(
     let peb32_ldr_addr = peb32_addr
         .checked_add(ldr_offset)
         .ok_or(KdmpParserError::Overflow("ldr32 offset"))?;
-    let Some(peb32_ldr_addr) =
-        parser.try_virt_read_struct::<u32>(Gva::new(peb32_ldr_addr.into()))?
+    let Some(peb32_ldr_addr) = parser.virt_read_struct::<u32>(Gva::new(peb32_ldr_addr.into()))?
     else {
         return Ok(Some(modules));
     };
@@ -355,15 +352,15 @@ fn try_extract_user_modules(
     Ok(Some(modules))
 }
 
-/// Filter out [`AddrTranslationError`] errors and turn them into `None`. This
+/// Filter out [`MemoryReadError`] errors and turn them into `None`. This
 /// makes it easier for caller code to write logic that can recover from a
 /// memory read failure by bailing out for example, and not bubbling up an
 /// error.
-fn filter_addr_translation_err<T>(res: Result<T>) -> Result<Option<T>> {
+fn filter_memory_err<T>(res: Result<T>) -> Result<Option<T>> {
     match res {
         Ok(o) => Ok(Some(o)),
         // If we encountered a memory reading error, we won't consider this as a failure.
-        Err(KdmpParserError::AddrTranslation(..)) => Ok(None),
+        Err(KdmpParserError::MemoryRead(..)) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -454,9 +451,8 @@ impl KernelDumpParser {
         // `KDDEBUGGER_DATA_BLOCK` structure to know where a bunch of things are.
         // If we can't read the block, we'll have to stop the adventure here as we won't
         // be able to read the things we need to keep going.
-        let Some(kd_debugger_data_block) = parser.try_virt_read_struct::<KdDebuggerData64>(
-            parser.headers().kd_debugger_data_block.into(),
-        )?
+        let Some(kd_debugger_data_block) = parser
+            .virt_read_struct::<KdDebuggerData64>(parser.headers().kd_debugger_data_block.into())?
         else {
             return Ok(parser);
         };
@@ -551,7 +547,7 @@ impl KernelDumpParser {
         let offset = *self
             .physmem
             .get(&gpa.page_align())
-            .ok_or(AddrTranslationError::Phys(gpa))?;
+            .ok_or(PageReadError::NotInDump { gva: None, gpa })?;
 
         offset
             .checked_add(gpa.offset())
@@ -611,7 +607,14 @@ impl KernelDumpParser {
         }
         // ..otherwise, we call it quits.
         else {
-            Err(KdmpParserError::PartialPhysRead)
+            let gpa = Gpa::new(gpa.u64() + u64::try_from(len).unwrap());
+
+            Err(MemoryReadError::PartialRead {
+                expected_amount: buf.len(),
+                actual_amount: len,
+                reason: PageReadError::NotInDump { gva: None, gpa },
+            }
+            .into())
         }
     }
 
@@ -639,16 +642,52 @@ impl KernelDumpParser {
         // Aligning in case PCID bits are set (bits 11:0)
         let pml4_base = dtb.page_align();
         let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
-        let pml4e = Pxe::from(self.phys_read_struct::<u64>(pml4e_gpa)?);
+        let pml4e = Pxe::from(self.phys_read_struct::<u64>(pml4e_gpa).map_err(|e| {
+            // If reading the PML4E failed due to a memory error, wrap it appropriately
+            if let KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+                PageReadError::NotInDump { gpa, .. },
+            )) = e
+            {
+                PageReadError::NotInDump {
+                    gva: Some((gva, Some(PxeKind::Pml4e))),
+                    gpa,
+                }
+                .into()
+            } else {
+                e
+            }
+        })?);
+
         if !pml4e.present() {
-            return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pml4e).into());
+            return Err(PageReadError::NotPresent {
+                gva,
+                which_pxe: PxeKind::Pml4e,
+            }
+            .into());
         }
 
         let pdpt_base = pml4e.pfn.gpa();
         let pdpte_gpa = Gpa::new(pdpt_base.u64() + (gva.pdpe_idx() * 8));
-        let pdpte = Pxe::from(self.phys_read_struct::<u64>(pdpte_gpa)?);
+        let pdpte = Pxe::from(self.phys_read_struct::<u64>(pdpte_gpa).map_err(|e| {
+            if let KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+                PageReadError::NotInDump { gpa, .. },
+            )) = e
+            {
+                PageReadError::NotInDump {
+                    gpa,
+                    gva: Some((gva, Some(PxeKind::Pdpte))),
+                }
+                .into()
+            } else {
+                e
+            }
+        })?);
         if !pdpte.present() {
-            return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pdpte).into());
+            return Err(PageReadError::NotPresent {
+                gva,
+                which_pxe: PxeKind::Pdpte,
+            }
+            .into());
         }
 
         // huge pages:
@@ -660,9 +699,27 @@ impl KernelDumpParser {
         }
 
         let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
-        let pde = Pxe::from(self.phys_read_struct::<u64>(pde_gpa)?);
+        let pde = Pxe::from(self.phys_read_struct::<u64>(pde_gpa).map_err(|e| {
+            if let KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+                PageReadError::NotInDump { gpa, .. },
+            )) = e
+            {
+                PageReadError::NotInDump {
+                    gva: Some((gva, Some(PxeKind::Pde))),
+                    gpa,
+                }
+                .into()
+            } else {
+                e
+            }
+        })?);
+
         if !pde.present() {
-            return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pde).into());
+            return Err(PageReadError::NotPresent {
+                gva,
+                which_pxe: PxeKind::Pde,
+            }
+            .into());
         }
 
         // large pages:
@@ -674,26 +731,59 @@ impl KernelDumpParser {
         }
 
         let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
-        let pte = Pxe::from(self.phys_read_struct::<u64>(pte_gpa)?);
+        let pte = Pxe::from(self.phys_read_struct::<u64>(pte_gpa).map_err(|e| {
+            if let KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+                PageReadError::NotInDump { gpa, .. },
+            )) = e
+            {
+                PageReadError::NotInDump {
+                    gva: Some((gva, Some(PxeKind::Pte))),
+                    gpa,
+                }
+                .into()
+            } else {
+                e
+            }
+        })?);
+
         if !pte.present() {
             // We'll allow reading from a transition PTE, so return an error only if it's
             // not one, otherwise we'll carry on.
             if !pte.transition() {
-                return Err(AddrTranslationError::Virt(gva, PxeNotPresent::Pte).into());
+                return Err(PageReadError::NotPresent {
+                    gva,
+                    which_pxe: PxeKind::Pte,
+                }
+                .into());
             }
         }
 
         Ok(VirtTranslationDetails::new(&[pml4e, pdpte, pde, pte], gva))
     }
 
-    /// Read virtual memory starting at `gva` into a `buffer`.
-    pub fn virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<usize> {
+    /// Read virtual memory starting at `gva` into a `buffer`. Returns `None` if
+    /// a memory error occurs (page not present, page not in dump, etc.).
+    pub fn virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<usize>> {
         self.virt_read_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
     }
 
     /// Read virtual memory starting at `gva` into a `buffer` using a specific
-    /// directory table base / set of page tables.
-    pub fn virt_read_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<usize> {
+    /// directory table base / set of page tables. Returns `None` if a memory
+    /// error occurs (page not present, page not in dump, etc.).
+    pub fn virt_read_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<Option<usize>> {
+        filter_memory_err(self.virt_read_strict_with_dtb(gva, buf, dtb))
+    }
+
+    /// Read virtual memory starting at `gva` into a `buffer`, propagating all
+    /// errors including memory errors.
+    pub fn virt_read_strict(&self, gva: Gva, buf: &mut [u8]) -> Result<usize> {
+        self.virt_read_strict_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read virtual memory starting at `gva` into a `buffer` using a specific
+    /// directory table base / set of page tables, propagating all errors
+    /// including memory errors.
+    pub fn virt_read_strict_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<usize> {
         // Amount of bytes left to read.
         let mut amount_left = buf.len();
         // Total amount of bytes that we have successfully read.
@@ -706,8 +796,17 @@ impl KernelDumpParser {
             // occured if we already have read some bytes.
             let translation = match self.virt_translate_with_dtb(addr, dtb) {
                 Ok(tr) => tr,
-                // If we already read some bytes, return how many we read..
-                Err(_) if total_read > 0 => return Ok(total_read),
+                // If we already read some bytes, convert the error to a PartialRead..
+                Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(reason)))
+                    if total_read > 0 =>
+                {
+                    return Err(MemoryReadError::PartialRead {
+                        expected_amount: buf.len(),
+                        actual_amount: total_read,
+                        reason,
+                    }
+                    .into());
+                }
                 // ..otherwise this is an error.
                 Err(e) => return Err(e),
             };
@@ -723,7 +822,40 @@ impl KernelDumpParser {
             let slice = &mut buf[total_read..total_read + amount_wanted];
 
             // Read the physical memory!
-            let amount_read = self.phys_read(translation.gpa(), slice)?;
+            let gpa = translation.gpa();
+            let amount_read = match self.phys_read(gpa, slice) {
+                Ok(n) => n,
+                Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(reason)))
+                    if total_read > 0 =>
+                {
+                    // Convert physical read error to include virtual address context
+                    let reason = match reason {
+                        PageReadError::NotInDump { gpa, .. } => PageReadError::NotInDump {
+                            gva: Some((addr, None)),
+                            gpa,
+                        },
+                        other => other,
+                    };
+
+                    return Err(MemoryReadError::PartialRead {
+                        expected_amount: buf.len(),
+                        actual_amount: total_read,
+                        reason,
+                    }
+                    .into());
+                }
+                Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+                    PageReadError::NotInDump { gpa, .. },
+                ))) => {
+                    // First read failed, convert to BackingPageNotInDump
+                    return Err(PageReadError::NotInDump {
+                        gva: Some((addr, None)),
+                        gpa,
+                    }
+                    .into());
+                }
+                Err(e) => return Err(e),
+            };
             // Update the total amount of read bytes and how much work we have left.
             total_read += amount_read;
             amount_left -= amount_read;
@@ -740,96 +872,98 @@ impl KernelDumpParser {
         Ok(total_read)
     }
 
-    /// Try to read virtual memory starting at `gva` into a `buffer`. If a
-    /// memory translation error occurs, it'll return `None` instead of an
-    /// error.
-    pub fn try_virt_read(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<usize>> {
-        filter_addr_translation_err(self.virt_read(gva, buf))
-    }
-
-    /// Try to read virtual memory starting at `gva` into a `buffer` using a
-    /// specific directory table base / set of page tables. If a
-    /// memory translation error occurs, it'll return `None` instead of an
-    /// error.
-    pub fn try_virt_read_with_dtb(
-        &self,
-        gva: Gva,
-        buf: &mut [u8],
-        dtb: Gpa,
-    ) -> Result<Option<usize>> {
-        filter_addr_translation_err(self.virt_read_with_dtb(gva, buf, dtb))
-    }
-
-    /// Read an exact amount of virtual memory starting at `gva`.
-    pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<()> {
+    /// Read an exact amount of virtual memory starting at `gva`. Returns `None`
+    /// if a memory error occurs (page not present, page not in dump, etc.).
+    pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
         self.virt_read_exact_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
     }
 
     /// Read an exact amount of virtual memory starting at `gva` using a
-    /// specific directory table base / set of page tables.
-    pub fn virt_read_exact_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<()> {
-        // Read virtual memory.
-        let len = self.virt_read_with_dtb(gva, buf, dtb)?;
-
-        // If we read as many bytes as we wanted, then it's a win..
-        if len == buf.len() {
-            Ok(())
-        }
-        // ..otherwise, we call it quits.
-        else {
-            Err(KdmpParserError::PartialVirtRead)
-        }
-    }
-
-    /// Try to read an exact amount of virtual memory starting at `gva`. If a
-    /// memory translation error occurs, it'll return `None` instead of an
-    /// error.
-    pub fn try_virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
-        self.try_virt_read_exact_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
-    }
-
-    /// Try to read an exact amount of virtual memory starting at `gva` using a
-    /// specific directory table base / set of page tables. If a
-    /// memory translation error occurs, it'll return `None` instead of an
-    /// error.
-    pub fn try_virt_read_exact_with_dtb(
+    /// specific directory table base / set of page tables. Returns `None` if a
+    /// memory error occurs (page not present, page not in dump, etc.).
+    pub fn virt_read_exact_with_dtb(
         &self,
         gva: Gva,
         buf: &mut [u8],
         dtb: Gpa,
     ) -> Result<Option<()>> {
-        filter_addr_translation_err(self.virt_read_exact_with_dtb(gva, buf, dtb))
+        filter_memory_err(self.virt_read_exact_strict_with_dtb(gva, buf, dtb))
     }
 
-    /// Read a `T` from virtual memory.
-    pub fn virt_read_struct<T>(&self, gva: Gva) -> Result<T> {
+    /// Read an exact amount of virtual memory starting at `gva`, propagating
+    /// all errors including memory errors.
+    pub fn virt_read_exact_strict(&self, gva: Gva, buf: &mut [u8]) -> Result<()> {
+        self.virt_read_exact_strict_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read an exact amount of virtual memory starting at `gva` using a
+    /// specific directory table base / set of page tables, propagating all
+    /// errors including memory errors.
+    pub fn virt_read_exact_strict_with_dtb(
+        &self,
+        gva: Gva,
+        buf: &mut [u8],
+        dtb: Gpa,
+    ) -> Result<()> {
+        // Read virtual memory.
+        let len = self.virt_read_strict_with_dtb(gva, buf, dtb)?;
+
+        // If we read as many bytes as we wanted, then it's a win..
+        if len == buf.len() {
+            Ok(())
+        }
+        // ..otherwise, we call it quits. The failure should have been reported
+        // as a PartialRead by virt_read_strict_with_dtb already, but this handles
+        // the case where we read some bytes but not all without hitting an error.
+        else {
+            let failed_gva = gva
+                .u64()
+                .checked_add(len.try_into().unwrap())
+                .map_or(gva, Gva::new);
+            // This shouldn't normally happen as virt_read_strict_with_dtb should report
+            // the specific error, but we provide a generic error just in case.
+            Err(MemoryReadError::PartialRead {
+                expected_amount: buf.len(),
+                actual_amount: len,
+                reason: PageReadError::NotInDump {
+                    gva: Some((failed_gva, None)),
+                    gpa: Gpa::new(0), // Unknown GPA
+                },
+            }
+            .into())
+        }
+    }
+
+    /// Read a `T` from virtual memory. Returns `None` if a memory error occurs
+    /// (page not present, page not in dump, etc.).
+    pub fn virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
         self.virt_read_struct_with_dtb(gva, Gpa::new(self.headers.directory_table_base))
     }
 
     /// Read a `T` from virtual memory using a specific directory table base /
-    /// set of page tables.
-    pub fn virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<T> {
+    /// set of page tables. Returns `None` if a memory error occurs (page not
+    /// present, page not in dump, etc.).
+    pub fn virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<Option<T>> {
+        filter_memory_err(self.virt_read_struct_strict_with_dtb::<T>(gva, dtb))
+    }
+
+    /// Read a `T` from virtual memory, propagating all errors including memory
+    /// errors.
+    pub fn virt_read_struct_strict<T>(&self, gva: Gva) -> Result<T> {
+        self.virt_read_struct_strict_with_dtb(gva, Gpa::new(self.headers.directory_table_base))
+    }
+
+    /// Read a `T` from virtual memory using a specific directory table base /
+    /// set of page tables, propagating all errors including memory errors.
+    pub fn virt_read_struct_strict_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<T> {
         let mut t: MaybeUninit<T> = MaybeUninit::uninit();
         let size_of_t = size_of_val(&t);
         let slice_over_t =
             unsafe { slice::from_raw_parts_mut(t.as_mut_ptr().cast::<u8>(), size_of_t) };
 
-        self.virt_read_exact_with_dtb(gva, slice_over_t, dtb)?;
+        self.virt_read_exact_strict_with_dtb(gva, slice_over_t, dtb)?;
 
         Ok(unsafe { t.assume_init() })
-    }
-
-    /// Try to read a `T` from virtual memory. If a memory translation error
-    /// occurs, it'll return `None` instead of an error.
-    pub fn try_virt_read_struct<T>(&self, gva: Gva) -> Result<Option<T>> {
-        self.try_virt_read_struct_with_dtb::<T>(gva, Gpa::new(self.headers.directory_table_base))
-    }
-
-    /// Try to read a `T` from virtual memory using a specific directory table
-    /// base / set of page tables. If a memory translation error occurs, it'
-    /// ll return `None` instead of an error.
-    pub fn try_virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<Option<T>> {
-        filter_addr_translation_err(self.virt_read_struct_with_dtb::<T>(gva, dtb))
     }
 
     /// Seek to `pos`.
@@ -850,23 +984,20 @@ impl KernelDumpParser {
         Ok(self.reader.borrow_mut().read(buf)?)
     }
 
-    /// Try to read a `UNICODE_STRING`.
-    fn try_virt_read_unicode_string<P>(
-        &self,
-        unicode_str: &UnicodeString<P>,
-    ) -> Result<Option<String>>
+    /// Read a `UNICODE_STRING`. Returns `None` if a memory error occurs.
+    fn virt_read_unicode_string<P>(&self, unicode_str: &UnicodeString<P>) -> Result<Option<String>>
     where
         P: PtrSize,
     {
-        self.try_virt_read_unicode_string_with_dtb(
+        self.virt_read_unicode_string_with_dtb(
             unicode_str,
             Gpa::new(self.headers.directory_table_base),
         )
     }
 
-    /// Try to read a `UNICODE_STRING` using a specific directory table base /
-    /// set of page tables.
-    fn try_virt_read_unicode_string_with_dtb<P>(
+    /// Read a `UNICODE_STRING` using a specific directory table base / set of
+    /// page tables. Returns `None` if a memory error occurs.
+    fn virt_read_unicode_string_with_dtb<P>(
         &self,
         unicode_str: &UnicodeString<P>,
         dtb: Gpa,
@@ -879,12 +1010,11 @@ impl KernelDumpParser {
         }
 
         let mut buffer = vec![0; unicode_str.length.into()];
-        match self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb) {
-            Ok(()) => {}
-            // If we encountered a memory translation error, we don't consider this a failure.
-            Err(KdmpParserError::AddrTranslation(_)) => return Ok(None),
-            Err(e) => return Err(e),
-        }
+        let Some(()) =
+            self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb)?
+        else {
+            return Ok(None);
+        };
 
         let n = unicode_str.length / 2;
 
