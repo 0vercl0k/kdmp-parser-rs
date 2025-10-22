@@ -436,8 +436,8 @@ fn regressions() {
     // PXE at FFFFECF67B3D9018    PPE at FFFFECF67B203480    PDE at FFFFECF640690BA8    PTE at FFFFEC80D2175180
     // contains 0A0000000ECC0867  contains 0A00000013341867  contains 0A000000077AF867  contains 00000000166B7880
     // pfn ecc0      ---DA--UWEV  pfn 13341     ---DA--UWEV  pfn 77af      ---DA--UWEV  not valid
-    //                                                                               Transition: 166b7
-    // Protect: 4 - ReadWrite
+    //                                                                                  Transition: 166b7
+    //                                                                                  Protect: 4 - ReadWrite
     // ```
     let parser = KernelDumpParser::new(&kernel_user_dump.file).unwrap();
     let mut buffer = [0; 16];
@@ -479,10 +479,27 @@ fn regressions() {
     ));
 
     assert!(matches!(
+        parser.virt_read(0x1a42ea30240.into(), &mut buffer),
+        Ok(None)
+    ));
+
+    assert!(matches!(
+        parser.phys_read(0x166b7240.into(), &mut buffer),
+        Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+            PageReadError::NotInDump { gva: None, gpa }
+        ))) if gpa == 0x166b7240.into()
+    ));
+
+    assert!(matches!(
         parser.virt_read_strict(0x16e23fa060.into(), &mut buffer),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
             PageReadError::NotInDump { gva: Some((gva, None)), gpa }
         ))) if gpa == 0x1bc4060.into() && gva == 0x16e23fa060.into()
+    ));
+
+    assert!(matches!(
+        parser.virt_read(0x16e23fa060.into(), &mut buffer),
+        Ok(None)
     ));
 
     // BUG: https://github.com/0vercl0k/kdmp-parser-rs/issues/10
@@ -506,6 +523,8 @@ fn regressions() {
     // There is no virtual memory available at 0x7ff7ab766ff7
     // ```
     //
+    // The below address mirrors the same behavior than in the issue's dump:
+    //
     // ```text
     // kd> db fffff803`f3086fef
     // fffff803`f3086fef  9d f5 de ff 48 85 c0 74-0a 40 8a cf e8 80 ee ba  ....H..t.@......
@@ -522,6 +541,11 @@ fn regressions() {
         })) if gva == 0xfffff803f3087000.into() && which_pxe == PxeKind::Pte
         )
     );
+
+    assert!(matches!(
+        parser.virt_read(0xfffff803f3086fef.into(), &mut buffer),
+        Ok(Some(17))
+    ));
 
     // ```text
     // kd> !process 0 0
@@ -573,7 +597,6 @@ fn regressions() {
         parser
             .virt_read_exact(Gva::new(0xfffff80122800000 + 0x100000 - 8), &mut buffer)
             .unwrap()
-            .is_some()
     );
 
     assert_eq!(buffer, [
@@ -602,7 +625,6 @@ fn regressions() {
         parser
             .virt_read_exact(Gva::new(0xfffff80122800000 + 0x200000 - 0x8), &mut buffer)
             .unwrap()
-            .is_some()
     );
 
     assert_eq!(buffer, [

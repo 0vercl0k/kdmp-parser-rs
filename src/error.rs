@@ -24,7 +24,7 @@ pub enum PageReadError {
     /// Virtual address translation failed because a page table entry is not
     /// present (it exists in the dump but is marked as not present).
     NotPresent { gva: Gva, which_pxe: PxeKind },
-    /// A physical page is missing from the dump. XXX:
+    /// A physical page is missing from the dump.
     NotInDump {
         gva: Option<(Gva, Option<PxeKind>)>,
         gpa: Gpa,
@@ -41,26 +41,25 @@ impl Error for PageReadError {}
 /// For example, consider reading two 4K pages from the virtual address
 /// `0x1337_000`; it can fail because:
 /// - The virtual address (the first 4K page) isn't present in the address space
-///   at the `Pde` level: `MemoryError::PageRead(PageReadError::PageNotPresent {
+///   at the `Pde` level: `MemoryReadError::PageRead(PageReadError::NotPresent {
 ///   gva: 0x1337_000, which_pxe: PxeKind::Pde })`
-/// - The `Pde` that needs reading as part of the translation (of the first
-///   page) isn't part of the crash-dump:
-///   `MemoryError::PageRead(PageReadError::TranslationPageNotInDump { gva:
-///   0x1337_000, gpa: .., which_pxe: PxeKind::Pde })`
+/// - The `Pde` that needs reading as part of the address translation (of the
+///   first page) isn't part of the crash-dump:
+///   `MemoryReadError::PageRead(PageReadError::NotInDump { gva:
+///   Some((0x1337_000, PxeKind::Pde)), gpa: .. })`
 /// - The physical page backing that virtual address isn't included in the
-///   crash-dump: `MemoryError::PageRead(PageReadError::BackingPageNotInDump {
-///   gva: 0x1337_000, gpa: .. })`
+///   crash-dump: `MemoryReadError::PageRead(PageReadError::NotInDump { gva:
+///   Some((0x1337_000, None)), gpa: .. })`
 /// - Reading the second (and only the second) page failed because of any of the
-///   previous reasons: `MemoryError::PartialRead { expected_amount: 8_192,
-///   actual_amount: 4_096, reason: PageReadError::PageNotPresent { .. } }`
+///   previous reasons: `MemoryReadError::PartialRead { expected_amount: 8_192,
+///   actual_amount: 4_096, reason: PageReadError::.. }`
 ///
 /// Similarly, for physical memory reads starting at `0x1337_000`:
 /// - A direct physical page isn't in the crash-dump:
-///   `MemoryError::PageRead(PageReadError::PhysicalPageNotInDump { gpa:
-///   0x1337_000 })`
+///   `MemoryError::PageRead(PageReadError::NotInDump { gpa: 0x1337_000 })`
 /// - Reading the second page failed: `MemoryError::PartialRead {
 ///   expected_amount: 8_192, actual_amount: 4_096, reason:
-///   PageReadError::PhysicalPageNotInDump { gpa: 0x1338_000 } }`
+///   PageReadError::NotInDump { gva: None, gpa: 0x1338_000 } }`
 ///
 /// We consider any of those errors 'recoverable' which means that we won't even
 /// bubble those up to the callers with the regular APIs. Only the `strict`

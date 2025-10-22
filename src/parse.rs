@@ -352,19 +352,6 @@ fn try_extract_user_modules(
     Ok(Some(modules))
 }
 
-/// Filter out [`MemoryReadError`] errors and turn them into `None`. This
-/// makes it easier for caller code to write logic that can recover from a
-/// memory read failure by bailing out for example, and not bubbling up an
-/// error.
-fn filter_memory_read_err<T>(res: Result<T>) -> Result<Option<T>> {
-    match res {
-        Ok(o) => Ok(Some(o)),
-        // If we encountered a memory reading error, we won't consider this as a failure.
-        Err(KdmpParserError::MemoryRead(..)) => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
 /// A module map. The key is the range of where the module lives at and the
 /// value is a path to the module or it's name if no path is available.
 pub type ModuleMap = HashMap<Range<Gva>, String>;
@@ -639,7 +626,7 @@ impl KernelDumpParser {
     /// / set of page tables.
     #[allow(clippy::similar_names)]
     pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<VirtTranslationDetails> {
-        let read_pxe = |gpa: Gpa, pxe_kind: PxeKind| {
+        let read_pxe = |gpa: Gpa, pxe: PxeKind| {
             self.phys_read_struct::<u64>(gpa)
                 .map_err(|e| match e {
                     // If the physical page isn't in the dump, enrich the error by adding the gva
@@ -647,7 +634,7 @@ impl KernelDumpParser {
                     KdmpParserError::MemoryRead(MemoryReadError::PageRead(
                         PageReadError::NotInDump { gpa, .. },
                     )) => PageReadError::NotInDump {
-                        gva: Some((gva, Some(pxe_kind))),
+                        gva: Some((gva, Some(pxe))),
                         gpa,
                     }
                     .into(),
@@ -732,7 +719,15 @@ impl KernelDumpParser {
     /// directory table base / set of page tables. Returns `None` if a memory
     /// error occurs (page not present, page not in dump, etc.).
     pub fn virt_read_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<Option<usize>> {
-        filter_memory_read_err(self.virt_read_strict_with_dtb(gva, buf, dtb))
+        match self.virt_read_strict_with_dtb(gva, buf, dtb) {
+            Ok(n) => Ok(Some(n)),
+            Err(KdmpParserError::MemoryRead(MemoryReadError::PartialRead {
+                actual_amount,
+                ..
+            })) => Ok(Some(actual_amount)),
+            Err(KdmpParserError::MemoryRead(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Read virtual memory starting at `gva` into a `buffer`, propagating all
@@ -835,20 +830,19 @@ impl KernelDumpParser {
 
     /// Read an exact amount of virtual memory starting at `gva`. Returns `None`
     /// if a memory error occurs (page not present, page not in dump, etc.).
-    pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
+    pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<bool> {
         self.virt_read_exact_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
     }
 
     /// Read an exact amount of virtual memory starting at `gva` using a
     /// specific directory table base / set of page tables. Returns `None` if a
     /// memory error occurs (page not present, page not in dump, etc.).
-    pub fn virt_read_exact_with_dtb(
-        &self,
-        gva: Gva,
-        buf: &mut [u8],
-        dtb: Gpa,
-    ) -> Result<Option<()>> {
-        filter_memory_read_err(self.virt_read_exact_strict_with_dtb(gva, buf, dtb))
+    pub fn virt_read_exact_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<bool> {
+        match self.virt_read_exact_strict_with_dtb(gva, buf, dtb) {
+            Ok(()) => Ok(true),
+            Err(KdmpParserError::MemoryRead(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Read an exact amount of virtual memory starting at `gva`, propagating
@@ -905,7 +899,11 @@ impl KernelDumpParser {
     /// set of page tables. Returns `None` if a memory error occurs (page not
     /// present, page not in dump, etc.).
     pub fn virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<Option<T>> {
-        filter_memory_read_err(self.virt_read_struct_strict_with_dtb::<T>(gva, dtb))
+        match self.virt_read_struct_strict_with_dtb::<T>(gva, dtb) {
+            Ok(t) => Ok(Some(t)),
+            Err(KdmpParserError::MemoryRead(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Read a `T` from virtual memory, propagating all errors including memory
@@ -971,11 +969,9 @@ impl KernelDumpParser {
         }
 
         let mut buffer = vec![0; unicode_str.length.into()];
-        let Some(()) =
-            self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb)?
-        else {
+        if !self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb)? {
             return Ok(None);
-        };
+        }
 
         let n = unicode_str.length / 2;
 

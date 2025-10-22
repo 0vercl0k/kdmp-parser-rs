@@ -183,10 +183,10 @@ fn main() -> Result<()> {
                         .unwrap_or(Gpa::new(parser.headers().directory_table_base)),
                 )
             } else {
-                parser.phys_read(Gpa::new(addr), &mut buffer)
-            };
+                parser.phys_read(Gpa::new(addr), &mut buffer).map(Some)
+            }?;
 
-            if let Ok(amount) = amount {
+            if let Some(amount) = amount {
                 hexdump(addr, &buffer[..amount], args.len);
             } else {
                 println!(
