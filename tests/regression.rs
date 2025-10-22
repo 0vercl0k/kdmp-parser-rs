@@ -597,6 +597,7 @@ fn regressions() {
         parser
             .virt_read_exact(Gva::new(0xfffff80122800000 + 0x100000 - 8), &mut buffer)
             .unwrap()
+            .is_some()
     );
 
     assert_eq!(buffer, [
@@ -625,6 +626,7 @@ fn regressions() {
         parser
             .virt_read_exact(Gva::new(0xfffff80122800000 + 0x200000 - 0x8), &mut buffer)
             .unwrap()
+            .is_some()
     );
 
     assert_eq!(buffer, [

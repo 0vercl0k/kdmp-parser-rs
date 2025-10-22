@@ -830,17 +830,22 @@ impl KernelDumpParser {
 
     /// Read an exact amount of virtual memory starting at `gva`. Returns `None`
     /// if a memory error occurs (page not present, page not in dump, etc.).
-    pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<bool> {
+    pub fn virt_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
         self.virt_read_exact_with_dtb(gva, buf, Gpa::new(self.headers.directory_table_base))
     }
 
     /// Read an exact amount of virtual memory starting at `gva` using a
     /// specific directory table base / set of page tables. Returns `None` if a
     /// memory error occurs (page not present, page not in dump, etc.).
-    pub fn virt_read_exact_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<bool> {
+    pub fn virt_read_exact_with_dtb(
+        &self,
+        gva: Gva,
+        buf: &mut [u8],
+        dtb: Gpa,
+    ) -> Result<Option<()>> {
         match self.virt_read_exact_strict_with_dtb(gva, buf, dtb) {
-            Ok(()) => Ok(true),
-            Err(KdmpParserError::MemoryRead(_)) => Ok(false),
+            Ok(()) => Ok(Some(())),
+            Err(KdmpParserError::MemoryRead(_)) => Ok(None),
             Err(e) => Err(e),
         }
     }
@@ -969,9 +974,11 @@ impl KernelDumpParser {
         }
 
         let mut buffer = vec![0; unicode_str.length.into()];
-        if !self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb)? {
+        let Some(()) =
+            self.virt_read_exact_with_dtb(Gva::new(unicode_str.buffer.into()), &mut buffer, dtb)?
+        else {
             return Ok(None);
-        }
+        };
 
         let n = unicode_str.length / 2;
 
