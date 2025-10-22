@@ -356,7 +356,7 @@ fn try_extract_user_modules(
 /// makes it easier for caller code to write logic that can recover from a
 /// memory read failure by bailing out for example, and not bubbling up an
 /// error.
-fn filter_memory_err<T>(res: Result<T>) -> Result<Option<T>> {
+fn filter_memory_read_err<T>(res: Result<T>) -> Result<Option<T>> {
     match res {
         Ok(o) => Ok(Some(o)),
         // If we encountered a memory reading error, we won't consider this as a failure.
@@ -639,25 +639,27 @@ impl KernelDumpParser {
     /// / set of page tables.
     #[allow(clippy::similar_names)]
     pub fn virt_translate_with_dtb(&self, gva: Gva, dtb: Gpa) -> Result<VirtTranslationDetails> {
+        let read_pxe = |gpa: Gpa, pxe_kind: PxeKind| {
+            self.phys_read_struct::<u64>(gpa)
+                .map_err(|e| match e {
+                    // If the physical page isn't in the dump, enrich the error by adding the gva
+                    // that was getting translated as well as the pxe level.
+                    KdmpParserError::MemoryRead(MemoryReadError::PageRead(
+                        PageReadError::NotInDump { gpa, .. },
+                    )) => PageReadError::NotInDump {
+                        gva: Some((gva, Some(pxe_kind))),
+                        gpa,
+                    }
+                    .into(),
+                    e => e,
+                })
+                .map(Pxe::from)
+        };
+
         // Aligning in case PCID bits are set (bits 11:0)
         let pml4_base = dtb.page_align();
         let pml4e_gpa = Gpa::new(pml4_base.u64() + (gva.pml4e_idx() * 8));
-        let pml4e = Pxe::from(self.phys_read_struct::<u64>(pml4e_gpa).map_err(|e| {
-            // If reading the PML4E failed due to a memory error, wrap it appropriately
-            if let KdmpParserError::MemoryRead(MemoryReadError::PageRead(
-                PageReadError::NotInDump { gpa, .. },
-            )) = e
-            {
-                PageReadError::NotInDump {
-                    gva: Some((gva, Some(PxeKind::Pml4e))),
-                    gpa,
-                }
-                .into()
-            } else {
-                e
-            }
-        })?);
-
+        let pml4e = read_pxe(pml4e_gpa, PxeKind::Pml4e)?;
         if !pml4e.present() {
             return Err(PageReadError::NotPresent {
                 gva,
@@ -668,20 +670,7 @@ impl KernelDumpParser {
 
         let pdpt_base = pml4e.pfn.gpa();
         let pdpte_gpa = Gpa::new(pdpt_base.u64() + (gva.pdpe_idx() * 8));
-        let pdpte = Pxe::from(self.phys_read_struct::<u64>(pdpte_gpa).map_err(|e| {
-            if let KdmpParserError::MemoryRead(MemoryReadError::PageRead(
-                PageReadError::NotInDump { gpa, .. },
-            )) = e
-            {
-                PageReadError::NotInDump {
-                    gpa,
-                    gva: Some((gva, Some(PxeKind::Pdpte))),
-                }
-                .into()
-            } else {
-                e
-            }
-        })?);
+        let pdpte = read_pxe(pdpte_gpa, PxeKind::Pdpte)?;
         if !pdpte.present() {
             return Err(PageReadError::NotPresent {
                 gva,
@@ -699,21 +688,7 @@ impl KernelDumpParser {
         }
 
         let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
-        let pde = Pxe::from(self.phys_read_struct::<u64>(pde_gpa).map_err(|e| {
-            if let KdmpParserError::MemoryRead(MemoryReadError::PageRead(
-                PageReadError::NotInDump { gpa, .. },
-            )) = e
-            {
-                PageReadError::NotInDump {
-                    gva: Some((gva, Some(PxeKind::Pde))),
-                    gpa,
-                }
-                .into()
-            } else {
-                e
-            }
-        })?);
-
+        let pde = read_pxe(pde_gpa, PxeKind::Pde)?;
         if !pde.present() {
             return Err(PageReadError::NotPresent {
                 gva,
@@ -731,21 +706,7 @@ impl KernelDumpParser {
         }
 
         let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
-        let pte = Pxe::from(self.phys_read_struct::<u64>(pte_gpa).map_err(|e| {
-            if let KdmpParserError::MemoryRead(MemoryReadError::PageRead(
-                PageReadError::NotInDump { gpa, .. },
-            )) = e
-            {
-                PageReadError::NotInDump {
-                    gva: Some((gva, Some(PxeKind::Pte))),
-                    gpa,
-                }
-                .into()
-            } else {
-                e
-            }
-        })?);
-
+        let pte = read_pxe(pte_gpa, PxeKind::Pte)?;
         if !pte.present() {
             // We'll allow reading from a transition PTE, so return an error only if it's
             // not one, otherwise we'll carry on.
@@ -771,7 +732,7 @@ impl KernelDumpParser {
     /// directory table base / set of page tables. Returns `None` if a memory
     /// error occurs (page not present, page not in dump, etc.).
     pub fn virt_read_with_dtb(&self, gva: Gva, buf: &mut [u8], dtb: Gpa) -> Result<Option<usize>> {
-        filter_memory_err(self.virt_read_strict_with_dtb(gva, buf, dtb))
+        filter_memory_read_err(self.virt_read_strict_with_dtb(gva, buf, dtb))
     }
 
     /// Read virtual memory starting at `gva` into a `buffer`, propagating all
@@ -834,7 +795,7 @@ impl KernelDumpParser {
                             gva: Some((addr, None)),
                             gpa,
                         },
-                        other => other,
+                        e @ PageReadError::NotPresent { .. } => e,
                     };
 
                     return Err(MemoryReadError::PartialRead {
@@ -887,7 +848,7 @@ impl KernelDumpParser {
         buf: &mut [u8],
         dtb: Gpa,
     ) -> Result<Option<()>> {
-        filter_memory_err(self.virt_read_exact_strict_with_dtb(gva, buf, dtb))
+        filter_memory_read_err(self.virt_read_exact_strict_with_dtb(gva, buf, dtb))
     }
 
     /// Read an exact amount of virtual memory starting at `gva`, propagating
@@ -944,7 +905,7 @@ impl KernelDumpParser {
     /// set of page tables. Returns `None` if a memory error occurs (page not
     /// present, page not in dump, etc.).
     pub fn virt_read_struct_with_dtb<T>(&self, gva: Gva, dtb: Gpa) -> Result<Option<T>> {
-        filter_memory_err(self.virt_read_struct_strict_with_dtb::<T>(gva, dtb))
+        filter_memory_read_err(self.virt_read_struct_strict_with_dtb::<T>(gva, dtb))
     }
 
     /// Read a `T` from virtual memory, propagating all errors including memory

@@ -83,7 +83,7 @@ fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
                 continue;
             }
 
-            eprintln!("{name} {found_mod:?}");
+            eprintln!("name: {name} filename: {filename} found_mod: {found_mod:#x?}");
             return false;
         }
     }
@@ -456,8 +456,8 @@ fn regressions() {
     // PXE at FFFFECF67B3D9018    PPE at FFFFECF67B203480    PDE at FFFFECF640690BA8    PTE at FFFFEC80D2175180
     // contains 0A0000000ECC0867  contains 0A00000013341867  contains 0A000000077AF867  contains 00000000166B7880
     // pfn ecc0      ---DA--UWEV  pfn 13341     ---DA--UWEV  pfn 77af      ---DA--UWEV  not valid
-    //                                            Transition: 166b7
-    //                                            Protect: 4 - ReadWrite
+    //                                                                                  Transition: 166b7
+    //                                                                                  Protect: 4 - ReadWrite
     // kd> !db 166b7240
     // Physical memory read at 166b7240 failed
     //
@@ -474,15 +474,15 @@ fn regressions() {
     assert!(matches!(
         parser.virt_read_strict(0x1a42ea30240.into(), &mut buffer),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
-            PageReadError::NotInDump { gpa, .. }
-        ))) if gpa == 0x166b7240.into()
+            PageReadError::NotInDump { gva: Some((gva, None)), gpa }
+        ))) if gpa == 0x166b7240.into() && gva == 0x1a42ea30240.into()
     ));
 
     assert!(matches!(
         parser.virt_read_strict(0x16e23fa060.into(), &mut buffer),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
-            PageReadError::NotInDump { gpa, .. }
-        ))) if gpa == 0x1bc4060.into()
+            PageReadError::NotInDump { gva: Some((gva, None)), gpa }
+        ))) if gpa == 0x1bc4060.into() && gva == 0x16e23fa060.into()
     ));
 
     // BUG: https://github.com/0vercl0k/kdmp-parser-rs/issues/10
@@ -497,12 +497,15 @@ fn regressions() {
     // ```text
     // kd> db 00007ff7`ab766ff7
     // 00007ff7`ab766ff7  00 00 00 00 00 00 00 00-00 ?? ?? ?? ?? ?? ?? ??  .........???????
-    // ...
+    // ```
+    //
+    // ```text
     // kdmp-parser-rs>cargo r --example parser -- mem.dmp --mem 00007ff7`ab766ff7 --virt --len 10
     //     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
     //      Running `target\debug\examples\parser.exe mem.dmp --mem 00007ff7`ab766ff7 --virt --len 10`
     // There is no virtual memory available at 0x7ff7ab766ff7
     // ```
+    //
     // ```text
     // kd> db fffff803`f3086fef
     // fffff803`f3086fef  9d f5 de ff 48 85 c0 74-0a 40 8a cf e8 80 ee ba  ....H..t.@......
@@ -510,16 +513,15 @@ fn regressions() {
     // fffff803`f308700f  ?? ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  ????????????????
     // ```
     let mut buffer = [0; 32];
-    match parser.virt_read_strict(0xfffff803f3086fef.into(), &mut buffer) {
+    assert!(
+        matches!(parser.virt_read_strict(0xfffff803f3086fef.into(), &mut buffer),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PartialRead {
             expected_amount: 32,
             actual_amount: 17,
-            ..
-        })) => {
-            // This is correct - we read 17 bytes before hitting unmapped memory
-        }
-        other => panic!("Expected PartialRead with actual_amount 17, got: {other:?}"),
-    }
+            reason: PageReadError::NotPresent { gva, which_pxe }
+        })) if gva == 0xfffff803f3087000.into() && which_pxe == PxeKind::Pte
+        )
+    );
 
     // ```text
     // kd> !process 0 0
@@ -570,8 +572,10 @@ fn regressions() {
     assert!(
         parser
             .virt_read_exact(Gva::new(0xfffff80122800000 + 0x100000 - 8), &mut buffer)
-            .is_ok()
+            .unwrap()
+            .is_some()
     );
+
     assert_eq!(buffer, [
         0x70, 0x72, 0x05, 0x00, 0x04, 0x3a, 0x65, 0x00, 0x54, 0x3a, 0x65, 0x00, 0xbc, 0x82, 0x0c,
         0x00
@@ -597,8 +601,10 @@ fn regressions() {
     assert!(
         parser
             .virt_read_exact(Gva::new(0xfffff80122800000 + 0x200000 - 0x8), &mut buffer)
-            .is_ok()
+            .unwrap()
+            .is_some()
     );
+
     assert_eq!(buffer, [
         0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
         0xcc

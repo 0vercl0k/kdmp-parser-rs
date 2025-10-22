@@ -22,16 +22,16 @@ use crate::{Bits, Gpa};
 pub struct PxeFlags(u64);
 
 impl PxeFlags {
-    pub const PRESENT: Self = Self(1 << 0);
-    pub const WRITABLE: Self = Self(1 << 1);
-    pub const USER_ACCESSIBLE: Self = Self(1 << 2);
-    pub const WRITE_THROUGH: Self = Self(1 << 3);
-    pub const CACHE_DISABLED: Self = Self(1 << 4);
     pub const ACCESSED: Self = Self(1 << 5);
+    pub const CACHE_DISABLED: Self = Self(1 << 4);
     pub const DIRTY: Self = Self(1 << 6);
     pub const LARGE_PAGE: Self = Self(1 << 7);
-    pub const TRANSITION: Self = Self(1 << 11);
     pub const NO_EXECUTE: Self = Self(1 << 63);
+    pub const PRESENT: Self = Self(1 << 0);
+    pub const TRANSITION: Self = Self(1 << 11);
+    pub const USER_ACCESSIBLE: Self = Self(1 << 2);
+    pub const WRITABLE: Self = Self(1 << 1);
+    pub const WRITE_THROUGH: Self = Self(1 << 3);
 
     #[must_use]
     pub fn new(bits: u64) -> Self {

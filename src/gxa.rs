@@ -13,7 +13,7 @@
 //! let page_aligned_gva = gva.page_align();
 //! let page_offset = gva.offset();
 //! ```
-use std::fmt::{self, Display};
+use std::fmt::{self, Debug, Display};
 use std::num::ParseIntError;
 use std::ops::AddAssign;
 use std::str::FromStr;
