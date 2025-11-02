@@ -428,7 +428,7 @@ fn regressions() {
     }
 
     // Example of a transition PTE readable by WinDbg (in kerneluserdump.dmp):
-    // ```
+    // ```text
     // kd> db 0x1a42ea30240 l10
     // 000001a4`2ea30240  e0 07 a3 2e a4 01 00 00-80 f2 a2 2e a4 01 00 00  ................
     // kd> !pte 0x1a42ea30240
@@ -445,12 +445,17 @@ fn regressions() {
         0xe0, 0x07, 0xa3, 0x2e, 0xa4, 0x01, 0x00, 0x00, 0x80, 0xf2, 0xa2, 0x2e, 0xa4, 0x01, 0x00,
         0x00,
     ];
-    assert!(parser.virt_read(0x1a42ea30240.into(), &mut buffer).is_ok());
+    assert!(
+        parser
+            .virt_read(0x1a42ea30240.into(), &mut buffer)
+            .inspect_err(|e| eprintln!("{e:?}"))
+            .is_ok()
+    );
     assert_eq!(buffer, expected_buffer);
 
-    // Example of a valid PTE that don't have a physical page backing it (in
+    // Examples of a valid PTE that don't have a physical page backing it (in
     // kerneldump.dmp):
-    // ```
+    // ```text
     // kd> !pte 0x1a42ea30240
     //     VA 000001a42ea30240
     // PXE at FFFFECF67B3D9018    PPE at FFFFECF67B203480    PDE at FFFFECF640690BA8    PTE at FFFFEC80D2175180
@@ -460,7 +465,9 @@ fn regressions() {
     //                                                                                  Protect: 4 - ReadWrite
     // kd> !db 166b7240
     // Physical memory read at 166b7240 failed
+    // ```
     //
+    // ```text
     // kd> !pte 0x16e23fa060
     //     VA 00000016e23fa060
     // PXE at FFFFECF67B3D9000    PPE at FFFFECF67B2002D8    PDE at FFFFECF64005B888    PTE at FFFFEC800B711FD0
@@ -472,33 +479,37 @@ fn regressions() {
     let parser = KernelDumpParser::new(&kernel_dump.file).unwrap();
     let mut buffer = [0];
     assert!(matches!(
-        parser.virt_read_strict(0x1a42ea30240.into(), &mut buffer),
+        parser.virt_read_strict(0x1a42ea30240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
             PageReadError::NotInDump { gva: Some((gva, None)), gpa }
         ))) if gpa == 0x166b7240.into() && gva == 0x1a42ea30240.into()
     ));
 
     assert!(matches!(
-        parser.virt_read(0x1a42ea30240.into(), &mut buffer),
+        parser
+            .virt_read(0x1a42ea30240.into(), &mut buffer)
+            .inspect_err(|e| eprintln!("{e:?}")),
         Ok(None)
     ));
 
     assert!(matches!(
-        parser.phys_read(0x166b7240.into(), &mut buffer),
+        parser.phys_read(0x166b7240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
             PageReadError::NotInDump { gva: None, gpa }
         ))) if gpa == 0x166b7240.into()
     ));
 
     assert!(matches!(
-        parser.virt_read_strict(0x16e23fa060.into(), &mut buffer),
+        parser.virt_read_strict(0x16e23fa060.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
             PageReadError::NotInDump { gva: Some((gva, None)), gpa }
         ))) if gpa == 0x1bc4060.into() && gva == 0x16e23fa060.into()
     ));
 
     assert!(matches!(
-        parser.virt_read(0x16e23fa060.into(), &mut buffer),
+        parser
+            .virt_read(0x16e23fa060.into(), &mut buffer)
+            .inspect_err(|e| eprintln!("{e:?}")),
         Ok(None)
     ));
 
@@ -533,7 +544,7 @@ fn regressions() {
     // ```
     let mut buffer = [0; 32];
     assert!(
-        matches!(parser.virt_read_strict(0xfffff803f3086fef.into(), &mut buffer),
+        matches!(parser.virt_read_strict(0xfffff803f3086fef.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PartialRead {
             expected_amount: 32,
             actual_amount: 17,
@@ -543,7 +554,9 @@ fn regressions() {
     );
 
     assert!(matches!(
-        parser.virt_read(0xfffff803f3086fef.into(), &mut buffer),
+        parser
+            .virt_read(0xfffff803f3086fef.into(), &mut buffer)
+            .inspect_err(|e| eprintln!("{e:?}")),
         Ok(Some(17))
     ));
 
