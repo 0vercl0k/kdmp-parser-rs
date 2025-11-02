@@ -781,34 +781,27 @@ impl KernelDumpParser {
             let gpa = translation.gpa();
             let amount_read = match self.phys_read(gpa, slice) {
                 Ok(n) => n,
-                Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(reason)))
-                    if total_read > 0 =>
-                {
-                    // Convert physical read error to include virtual address context
-                    let reason = match reason {
-                        PageReadError::NotInDump { gpa, .. } => PageReadError::NotInDump {
-                            gva: Some((addr, None)),
-                            gpa,
-                        },
-                        e @ PageReadError::NotPresent { .. } => e,
-                    };
-
-                    return Err(MemoryReadError::PartialRead {
-                        expected_amount: buf.len(),
-                        actual_amount: total_read,
-                        reason,
-                    }
-                    .into());
-                }
-                Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
-                    PageReadError::NotInDump { gpa, .. },
-                ))) => {
-                    // First read failed, convert to BackingPageNotInDump
-                    return Err(PageReadError::NotInDump {
+                Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(reason))) => {
+                    // If we got a `MemoryRead`, then `phys_read` can only fail if there's no
+                    // backing page found; let's ensure that.
+                    debug_assert!(matches!(reason, PageReadError::NotInDump { gva: None, .. }));
+                    // Augment `NotInDump` with the `gva` as `phys_read` doesn't know anything about
+                    // it.
+                    let reason = PageReadError::NotInDump {
                         gva: Some((addr, None)),
                         gpa,
-                    }
-                    .into());
+                    };
+
+                    return Err(if total_read > 0 {
+                        MemoryReadError::PartialRead {
+                            expected_amount: buf.len(),
+                            actual_amount: total_read,
+                            reason,
+                        }
+                        .into()
+                    } else {
+                        reason.into()
+                    });
                 }
                 Err(e) => return Err(e),
             };
