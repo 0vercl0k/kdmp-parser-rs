@@ -516,12 +516,13 @@ fn regressions() {
     // BUG: https://github.com/0vercl0k/kdmp-parser-rs/issues/10
     // When reading the end of a virtual memory page that has no available
     // memory behind, there was an issue in the virtual read algorithm. The
-    // first time the loop ran, it reads as much as it can and if the user
+    // first time the loop ran, it reads as much as it could and if the user
     // wanted more, then the loop runs a second time to virt translate the next
     // page. However, because there is nothing mapped the virtual to physical
     // translation fails & bails (because of `?`) which suggests to the user
     // that the read operation completely failed when it was in fact able to
     // read some amount of bytes.
+    //
     // ```text
     // kd> db 00007ff7`ab766ff7
     // 00007ff7`ab766ff7  00 00 00 00 00 00 00 00-00 ?? ?? ?? ?? ?? ?? ??  .........???????
@@ -590,6 +591,7 @@ fn regressions() {
     ]);
 
     // Read from the middle of a large page.
+    //
     // ```text
     // 32.1: kd> !pte nt
     //                                            VA fffff80122800000
@@ -619,6 +621,7 @@ fn regressions() {
     ]);
 
     // Read from two straddling large pages.
+    //
     // ```text
     // 32.1: kd> !pte 0xfffff80122800000 + 0x200000 - 0x8
     //                                            VA fffff801229ffff8
