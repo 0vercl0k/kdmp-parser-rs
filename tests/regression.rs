@@ -4,10 +4,9 @@ use std::env;
 use std::fs::File;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
-use kdmp_parser::{
-    Gpa, Gva, KdmpParserError, KernelDumpParser, MemoryReadError, PageKind, PageReadError, PxeKind,
-};
+use kdmp_parser::{Gpa, Gva, KdmpParserError, KernelDumpParser, PageKind, PageReadError, PxeKind};
 use serde::Deserialize;
 
 /// Convert an hexadecimal encoded integer string into a `u64`.
@@ -91,18 +90,38 @@ fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
     seen.len() == modules.len()
 }
 
+static BASE_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
+    PathBuf::from(env::var("TESTDATAS").expect("I need the TESTDATAS env var to work"))
+});
+
+static TEST_DIR: LazyLock<PathBuf> =
+    LazyLock::new(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests"));
+
 // Extract the info with WinDbg w/ the below:
 // ```
 // dx -r2 @$curprocess.Modules.Select(p => new {start=p.BaseAddress, end=p.BaseAddress + p.Size, name=p.Name})
 // ```
+static BMP_PATH: LazyLock<PathBuf> = LazyLock::new(|| BASE_PATH.join("bmp.dmp"));
+
+static FULL_PATH: LazyLock<PathBuf> = LazyLock::new(|| BASE_PATH.join("full.dmp"));
+
+static KERNEL_DUMP_PATH: LazyLock<PathBuf> = LazyLock::new(|| BASE_PATH.join("kerneldump.dmp"));
+
+static KERNEL_USER_DUMP_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| BASE_PATH.join("kerneluserdump.dmp"));
+
+static COMPLETE_DUMP_PATH: LazyLock<PathBuf> = LazyLock::new(|| BASE_PATH.join("completedump.dmp"));
+
+static LIVE_KERNEL_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| BASE_PATH.join("fulllivekernelmemory.dmp"));
+
+static WOW64_DUMP_PATH: LazyLock<PathBuf> =
+    LazyLock::new(|| BASE_PATH.join("wow64_kernelactive.dmp"));
+
 #[test]
 fn regressions() {
-    let base_path =
-        PathBuf::from(env::var("TESTDATAS").expect("I need the TESTDATAS env var to work"));
-
-    let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
     let modules_1: Vec<M> =
-        serde_json::from_reader(File::open(test_dir.join("modules_1.json")).unwrap()).unwrap();
+        serde_json::from_reader(File::open(TEST_DIR.join("modules_1.json")).unwrap()).unwrap();
     let modules_1 = modules_1
         .into_iter()
         .map(|m| m.into())
@@ -117,7 +136,7 @@ fn regressions() {
     // iopl=0         nv up ei pl nz na pe nc
     // cs=0010  ss=0018  ds=002b  es=002b  fs=0053  gs=002b efl=00040202
     let bmp = TestcaseValues {
-        file: base_path.join("bmp.dmp"),
+        file: BMP_PATH.to_path_buf(),
         dump_type: kdmp_parser::DumpType::Bmp,
         size: 0x54_4b,
         phys_addr: 0x6d_4d_22,
@@ -151,7 +170,7 @@ fn regressions() {
     };
 
     let full = TestcaseValues {
-        file: base_path.join("full.dmp"),
+        file: FULL_PATH.to_path_buf(),
         dump_type: kdmp_parser::DumpType::Full,
         size: 0x03_fb_e6,
         phys_addr: 0x6d_4d_22,
@@ -185,14 +204,14 @@ fn regressions() {
     };
 
     let modules_2: Vec<M> =
-        serde_json::from_reader(File::open(test_dir.join("modules_2.json")).unwrap()).unwrap();
+        serde_json::from_reader(File::open(TEST_DIR.join("modules_2.json")).unwrap()).unwrap();
     let modules_2 = modules_2
         .into_iter()
         .map(|m| m.into())
         .collect::<Vec<Module>>();
 
     let kernel_dump = TestcaseValues {
-        file: base_path.join("kerneldump.dmp"),
+        file: KERNEL_DUMP_PATH.to_path_buf(),
         dump_type: kdmp_parser::DumpType::KernelMemory,
         size: 0xa0_2e,
         phys_addr: 0x02_58_92_f0,
@@ -226,14 +245,14 @@ fn regressions() {
     };
 
     let modules_3: Vec<M> =
-        serde_json::from_reader(File::open(test_dir.join("modules_3.json")).unwrap()).unwrap();
+        serde_json::from_reader(File::open(TEST_DIR.join("modules_3.json")).unwrap()).unwrap();
     let modules_3 = modules_3
         .into_iter()
         .map(|m| m.into())
         .collect::<Vec<Module>>();
 
     let kernel_user_dump = TestcaseValues {
-        file: base_path.join("kerneluserdump.dmp"),
+        file: KERNEL_USER_DUMP_PATH.to_path_buf(),
         dump_type: kdmp_parser::DumpType::KernelAndUserMemory,
         size: 0x01_f7_c7,
         phys_addr: 0x02_58_92_f0,
@@ -267,7 +286,7 @@ fn regressions() {
     };
 
     let complete_dump = TestcaseValues {
-        file: base_path.join("completedump.dmp"),
+        file: COMPLETE_DUMP_PATH.to_path_buf(),
         dump_type: kdmp_parser::DumpType::CompleteMemory,
         size: 0x01_fb_f9,
         phys_addr: 0x02_58_92_f0,
@@ -301,14 +320,14 @@ fn regressions() {
     };
 
     let modules_4: Vec<M> =
-        serde_json::from_reader(File::open(test_dir.join("modules_4.json")).unwrap()).unwrap();
+        serde_json::from_reader(File::open(TEST_DIR.join("modules_4.json")).unwrap()).unwrap();
     let modules_4 = modules_4
         .into_iter()
         .map(|m| m.into())
         .collect::<Vec<Module>>();
 
     let live_kernel = TestcaseValues {
-        file: base_path.join("fulllivekernelmemory.dmp"),
+        file: LIVE_KERNEL_PATH.to_path_buf(),
         dump_type: kdmp_parser::DumpType::LiveKernelMemory,
         size: 0x01_54_f5,
         phys_addr: 0xd9_6a_90_00,
@@ -342,14 +361,14 @@ fn regressions() {
     };
 
     let modules_5: Vec<M> =
-        serde_json::from_reader(File::open(test_dir.join("modules_5.json")).unwrap()).unwrap();
+        serde_json::from_reader(File::open(TEST_DIR.join("modules_5.json")).unwrap()).unwrap();
     let modules_5 = modules_5
         .into_iter()
         .map(|m| m.into())
         .collect::<Vec<Module>>();
 
     let wow64 = TestcaseValues {
-        file: base_path.join("wow64_kernelactive.dmp"),
+        file: WOW64_DUMP_PATH.to_path_buf(),
         dump_type: kdmp_parser::DumpType::KernelAndUserMemory,
         size: 0x03_ec_ff,
         phys_addr: 0x06_23_50_00,
@@ -394,16 +413,18 @@ fn regressions() {
 
     for test in tests {
         let parser = KernelDumpParser::new(&test.file).unwrap();
+        let virt_reader = virt::Reader::new(&parser);
+        let phys_reader = phys::Reader::new(&parser);
         eprintln!("{parser:?}");
         assert_eq!(parser.dump_type(), test.dump_type);
         assert_eq!(parser.physmem().len(), test.size as usize);
         let mut buf = [0; 16];
-        parser
-            .phys_read_exact(Gpa::new(test.phys_addr), &mut buf)
+        phys_reader
+            .read_exact(Gpa::new(test.phys_addr), &mut buf)
             .unwrap();
         assert_eq!(buf, test.phys_bytes);
-        parser
-            .virt_read_exact(Gva::new(test.virt_addr), &mut buf)
+        virt_reader
+            .read_exact(Gva::new(test.virt_addr), &mut buf)
             .unwrap();
         assert_eq!(buf, test.virt_bytes);
         let ctx = parser.context_record();
@@ -426,7 +447,10 @@ fn regressions() {
         assert_eq!(ctx.r15, test.r15);
         assert!(compare_modules(&parser, test.modules));
     }
+}
 
+#[test]
+fn transition_pte() {
     // Example of a transition PTE readable by WinDbg (in kerneluserdump.dmp):
     // ```text
     // kd> db 0x1a42ea30240 l10
@@ -439,20 +463,24 @@ fn regressions() {
     //                                                                                  Transition: 166b7
     //                                                                                  Protect: 4 - ReadWrite
     // ```
-    let parser = KernelDumpParser::new(&kernel_user_dump.file).unwrap();
+    let parser = KernelDumpParser::new(KERNEL_USER_DUMP_PATH).unwrap();
+    let reader = virt::Reader::new(&parser);
     let mut buffer = [0; 16];
     let expected_buffer = [
         0xe0, 0x07, 0xa3, 0x2e, 0xa4, 0x01, 0x00, 0x00, 0x80, 0xf2, 0xa2, 0x2e, 0xa4, 0x01, 0x00,
         0x00,
     ];
     assert!(
-        parser
-            .virt_read(0x1a42ea30240.into(), &mut buffer)
+        reader
+            .read(0x1a42ea30240.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}"))
             .is_ok()
     );
     assert_eq!(buffer, expected_buffer);
+}
 
+#[test]
+fn valid_pte_no_backing() {
     // Examples of a valid PTE that don't have a physical page backing it (in
     // kerneldump.dmp):
     // ```text
@@ -476,43 +504,48 @@ fn regressions() {
     // kd> !db 1bc4000
     // Physical memory read at 1bc4000 failed
     // ```
-    let parser = KernelDumpParser::new(&kernel_dump.file).unwrap();
+    let parser = KernelDumpParser::new(KERNEL_DUMP_PATH).unwrap();
+    let virt_reader = virt::Reader::new(&parser);
     let mut buffer = [0];
     assert!(matches!(
-        parser.virt_read_strict(0x1a42ea30240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+        virt_reader.read(0x1a42ea30240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
             PageReadError::NotInDump { gva: Some((gva, None)), gpa }
         ))) if gpa == 0x166b7240.into() && gva == 0x1a42ea30240.into()
     ));
 
     assert!(matches!(
-        parser
-            .virt_read(0x1a42ea30240.into(), &mut buffer)
+        virt_reader
+            .read(0x1a42ea30240.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(None)
     ));
 
+    let phys_reader = phys::Reader::new(&parser);
     assert!(matches!(
-        parser.phys_read(0x166b7240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+        phys_reader.read(Gpa::new(0x166b7240), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
             PageReadError::NotInDump { gva: None, gpa }
         ))) if gpa == 0x166b7240.into()
     ));
 
     assert!(matches!(
-        parser.virt_read_strict(0x16e23fa060.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+        virt_reader.read(0x16e23fa060.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(KdmpParserError::MemoryRead(MemoryReadError::PageRead(
             PageReadError::NotInDump { gva: Some((gva, None)), gpa }
         ))) if gpa == 0x1bc4060.into() && gva == 0x16e23fa060.into()
     ));
 
     assert!(matches!(
-        parser
-            .virt_read(0x16e23fa060.into(), &mut buffer)
+        virt_reader
+            .read(0x16e23fa060.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(None)
     ));
+}
 
+#[test]
+fn bug_10() {
     // BUG: https://github.com/0vercl0k/kdmp-parser-rs/issues/10
     // When reading the end of a virtual memory page that has no available
     // memory behind, there was an issue in the virtual read algorithm. The
@@ -574,7 +607,7 @@ fn regressions() {
     // 0000015c`c6603928  6d 00 33 00 32 00 5c 00-52 00 75 00 6e 00 74 00  m.3.2.\.R.u.n.t.
     // 0000015c`c6603938  69 00 6d 00 65 00 42 00-72 00 6f 00 6b 00 65 00  i.m.e.B.r.o.k.e.
     // ```
-    let parser = KernelDumpParser::new(&complete_dump.file).unwrap();
+    let parser = KernelDumpParser::new(COMPLETE_DUMP_PATH).unwrap();
     let mut buffer = [0; 64];
     assert!(
         parser
@@ -589,7 +622,10 @@ fn regressions() {
         0x00, 0x74, 0x00, 0x69, 0x00, 0x6d, 0x00, 0x65, 0x00, 0x42, 0x00, 0x72, 0x00, 0x6f, 0x00,
         0x6b, 0x00, 0x65, 0x00
     ]);
+}
 
+#[test]
+fn large_page() {
     // Read from the middle of a large page.
     //
     // ```text
@@ -599,7 +635,7 @@ fn regressions() {
     // contains 0000000002709063  contains 000000000270A063  contains 8A000000048001A1  contains 0000000000000000
     // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 4800
     // ```
-    let parser = KernelDumpParser::new(&wow64.file).unwrap();
+    let parser = KernelDumpParser::new(WOW64_DUMP_PATH).unwrap();
     let tr = parser.virt_translate(0xfffff80122800000.into()).unwrap();
     assert!(matches!(tr.page_kind, PageKind::Large));
     assert!(matches!(tr.pfn.u64(), 0x4800));

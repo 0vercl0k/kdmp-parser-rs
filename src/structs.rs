@@ -9,6 +9,15 @@ use std::slice;
 use crate::error::Result;
 use crate::{Gpa, KdmpParserError, Reader};
 
+// The rules are:
+// 1/ no padding bytes (otherwise you could potentially leak memory)
+// 2/ no invalid bit patterns
+pub unsafe trait Pod {}
+
+unsafe impl Pod for u32 {}
+unsafe impl Pod for u64 {}
+unsafe impl Pod for u16 {}
+
 /// The different kind of physical pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageKind {
@@ -136,6 +145,8 @@ pub struct Header64 {
     reserved1: [u8; 4008],
 }
 
+unsafe impl Pod for Header64 {}
+
 impl Debug for Header64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Header64")
@@ -199,6 +210,8 @@ pub struct BmpHeader64 {
     // Bitmap follows
 }
 
+unsafe impl Pod for BmpHeader64 {}
+
 impl BmpHeader64 {
     pub fn looks_good(&self) -> bool {
         (self.signature == BMPHEADER64_EXPECTED_SIGNATURE
@@ -213,6 +226,8 @@ pub struct PhysmemRun {
     pub base_page: u64,
     pub page_count: u64,
 }
+
+unsafe impl Pod for PhysmemRun {}
 
 impl PhysmemRun {
     /// Calculate a physical address from a run and an index.
@@ -236,6 +251,8 @@ pub struct PhysmemDesc {
     pub number_of_pages: u64,
     // PHYSMEM_RUN Run[1]; follows
 }
+
+unsafe impl Pod for PhysmemDesc {}
 
 impl TryFrom<&[u8]> for PhysmemDesc {
     type Error = KdmpParserError;
@@ -323,6 +340,8 @@ pub struct Context {
     pub last_exception_from_rip: u64,
 }
 
+unsafe impl Pod for Context {}
+
 impl Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Context")
@@ -388,7 +407,7 @@ impl Debug for Context {
 }
 
 /// Peek for a `T` from the cursor.
-pub fn peek_struct<T>(reader: &mut impl Reader) -> Result<T> {
+pub fn peek_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
     let mut s: MaybeUninit<T> = MaybeUninit::uninit();
     let size_of_s = size_of_val(&s);
     let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr().cast::<u8>(), size_of_s) };
@@ -401,7 +420,7 @@ pub fn peek_struct<T>(reader: &mut impl Reader) -> Result<T> {
 }
 
 /// Read a `T` from the cursor.
-pub fn read_struct<T>(reader: &mut impl Reader) -> Result<T> {
+pub fn read_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
     let s = peek_struct(reader)?;
     let size_of_s = size_of_val(&s);
 
@@ -457,6 +476,8 @@ pub struct KernelRdmpHeader64 {
     // Bitmap follows
 }
 
+unsafe impl Pod for KernelRdmpHeader64 {}
+
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct FullRdmpHeader64 {
@@ -468,6 +489,8 @@ pub struct FullRdmpHeader64 {
     // Bitmap follows
 }
 
+unsafe impl Pod for FullRdmpHeader64 {}
+
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PfnRange {
@@ -475,24 +498,30 @@ pub struct PfnRange {
     pub number_of_pages: u64,
 }
 
+unsafe impl Pod for PfnRange {}
+
 #[repr(C)]
 #[derive(Debug, Default)]
-pub struct ListEntry<P> {
+pub struct ListEntry<P: Pod> {
     pub flink: P,
     pub blink: P,
 }
 
+unsafe impl<P: Pod> Pod for ListEntry<P> {}
+
 #[repr(C)]
 #[derive(Debug, Default)]
-pub struct UnicodeString<P> {
+pub struct UnicodeString<P: Pod> {
     pub length: u16,
     pub maximum_length: u16,
     pub buffer: P,
 }
 
+unsafe impl<P: Pod> Pod for UnicodeString<P> {}
+
 #[derive(Debug, Default)]
 #[repr(C)]
-pub struct LdrDataTableEntry<P> {
+pub struct LdrDataTableEntry<P: Pod> {
     pub in_load_order_links: ListEntry<P>,
     pub in_memory_order_links: ListEntry<P>,
     pub in_initialization_order_links: ListEntry<P>,
@@ -502,6 +531,8 @@ pub struct LdrDataTableEntry<P> {
     pub full_dll_name: UnicodeString<P>,
     pub base_dll_name: UnicodeString<P>,
 }
+
+unsafe impl<P: Pod> Pod for LdrDataTableEntry<P> {}
 
 // Copied from `WDBGEXTS.H`.
 #[repr(C)]
@@ -516,6 +547,8 @@ pub struct DbgKdDebugDataHeader64 {
     /// including this structure.
     pub size: u32,
 }
+
+unsafe impl Pod for DbgKdDebugDataHeader64 {}
 
 // https://github.com/tpn/winsdk-10/blob/9b69fd26ac0c7d0b83d378dba01080e93349c2ed/Include/10.0.14393.0/um/WDBGEXTS.H#L1206C16-L1206C34
 #[repr(C)]
@@ -682,6 +715,8 @@ pub struct KdDebuggerData64 {
     pub offset_prcb_context: u16,
     // ...
 }
+
+unsafe impl Pod for KdDebuggerData64 {}
 
 #[cfg(test)]
 mod tests {

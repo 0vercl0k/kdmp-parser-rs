@@ -64,17 +64,6 @@ impl Error for PageReadError {}
 /// We consider any of those errors 'recoverable' which means that we won't even
 /// bubble those up to the callers with the regular APIs. Only the `strict`
 /// versions will.
-#[derive(Debug, Clone)]
-pub enum MemoryReadError {
-    /// A single page/read failed.
-    PageRead(PageReadError),
-    /// A read request was only partially fulfilled.
-    PartialRead {
-        expected_amount: usize,
-        actual_amount: usize,
-        reason: PageReadError,
-    },
-}
 
 impl Display for PageReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -96,30 +85,37 @@ impl Display for PageReadError {
     }
 }
 
-impl Error for MemoryReadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            MemoryReadError::PageRead(e) => Some(e),
-            MemoryReadError::PartialRead { reason, .. } => Some(reason),
+/// A read request was only partially fulfilled.
+#[derive(Debug)]
+pub struct PartialReadError {
+    pub expected_amount: usize,
+    pub actual_amount: usize,
+    pub reason: PageReadError,
+}
+
+impl PartialReadError {
+    pub fn new(expected_amount: usize, actual_amount: usize, reason: PageReadError) -> Self {
+        Self {
+            expected_amount,
+            actual_amount,
+            reason,
         }
     }
 }
 
-impl Display for MemoryReadError {
+impl Error for PartialReadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.reason)
+    }
+}
+
+impl Display for PartialReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MemoryReadError::PageRead(_) => write!(f, "page read"),
-            MemoryReadError::PartialRead {
-                expected_amount,
-                actual_amount,
-                ..
-            } => {
-                write!(
-                    f,
-                    "partially read {actual_amount} off {expected_amount} wanted bytes"
-                )
-            }
-        }
+        write!(
+            f,
+            "partially read {} bytes out of {} because of {}",
+            self.actual_amount, self.expected_amount, self.reason
+        )
     }
 }
 
@@ -137,64 +133,66 @@ pub enum KdmpParserError {
     PhysAddrOverflow(u32, u64),
     PageOffsetOverflow(u32, u64),
     BitmapPageOffsetOverflow(u64, usize),
-    MemoryRead(MemoryReadError),
+    PartialRead(PartialReadError),
+    PageRead(PageReadError),
 }
 
 impl From<io::Error> for KdmpParserError {
     fn from(value: io::Error) -> Self {
-        KdmpParserError::Io(value)
+        Self::Io(value)
     }
 }
 
 impl From<FromUtf16Error> for KdmpParserError {
     fn from(value: FromUtf16Error) -> Self {
-        KdmpParserError::Utf16(value)
+        Self::Utf16(value)
     }
 }
 
-impl From<MemoryReadError> for KdmpParserError {
-    fn from(value: MemoryReadError) -> Self {
-        KdmpParserError::MemoryRead(value)
+impl From<PartialReadError> for KdmpParserError {
+    fn from(value: PartialReadError) -> Self {
+        Self::PartialRead(value)
     }
 }
 
 impl From<PageReadError> for KdmpParserError {
     fn from(value: PageReadError) -> Self {
-        Self::MemoryRead(MemoryReadError::PageRead(value))
+        Self::PageRead(value)
     }
 }
 
 impl Display for KdmpParserError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            KdmpParserError::InvalidUnicodeString => write!(f, "invalid UNICODE_STRING"),
-            KdmpParserError::Utf16(_) => write!(f, "utf16"),
-            KdmpParserError::Overflow(o) => write!(f, "overflow: {o}"),
-            KdmpParserError::Io(_) => write!(f, "io"),
-            KdmpParserError::InvalidData(i) => write!(f, "invalid data: {i}"),
-            KdmpParserError::UnknownDumpType(u) => write!(f, "unsupported dump type {u:#x}"),
-            KdmpParserError::DuplicateGpa(gpa) => {
+            Self::InvalidUnicodeString => write!(f, "invalid UNICODE_STRING"),
+            Self::Utf16(_) => write!(f, "utf16"),
+            Self::Overflow(o) => write!(f, "overflow: {o}"),
+            Self::Io(_) => write!(f, "io"),
+            Self::InvalidData(i) => write!(f, "invalid data: {i}"),
+            Self::UnknownDumpType(u) => write!(f, "unsupported dump type {u:#x}"),
+            Self::DuplicateGpa(gpa) => {
                 write!(f, "duplicate gpa found in physmem map for {gpa}")
             }
-            KdmpParserError::InvalidSignature(sig) => write!(
+            Self::InvalidSignature(sig) => write!(
                 f,
                 "header's signature looks wrong: {sig:#x} vs {DUMP_HEADER64_EXPECTED_SIGNATURE:#x}"
             ),
-            KdmpParserError::InvalidValidDump(dump) => write!(
+            Self::InvalidValidDump(dump) => write!(
                 f,
                 "header's valid dump looks wrong: {dump:#x} vs {DUMP_HEADER64_EXPECTED_VALID_DUMP:#x}"
             ),
-            KdmpParserError::PhysAddrOverflow(run, page) => {
+            Self::PhysAddrOverflow(run, page) => {
                 write!(f, "overflow for phys addr w/ run {run} page {page}")
             }
-            KdmpParserError::PageOffsetOverflow(run, page) => {
+            Self::PageOffsetOverflow(run, page) => {
                 write!(f, "overflow for page offset w/ run {run} page {page}")
             }
-            KdmpParserError::BitmapPageOffsetOverflow(bitmap_idx, bit_idx) => write!(
+            Self::BitmapPageOffsetOverflow(bitmap_idx, bit_idx) => write!(
                 f,
                 "overflow for page offset w/ bitmap_idx {bitmap_idx} bit_idx {bit_idx}"
             ),
-            KdmpParserError::MemoryRead(_) => write!(f, "memory read"),
+            Self::PartialRead(p) => write!(f, "partial read: {p}"),
+            Self::PageRead(p) => write!(f, "page read: {p}"),
         }
     }
 }
@@ -202,9 +200,9 @@ impl Display for KdmpParserError {
 impl Error for KdmpParserError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            KdmpParserError::Utf16(u) => Some(u),
-            KdmpParserError::Io(e) => Some(e),
-            KdmpParserError::MemoryRead(m) => Some(m),
+            Self::Utf16(u) => Some(u),
+            Self::Io(e) => Some(e),
+            Self::PartialRead(PartialReadError { reason, .. }) => Some(reason),
             _ => None,
         }
     }
