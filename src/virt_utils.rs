@@ -32,7 +32,7 @@ fn read_unicode_string(
     reader: &virt::Reader,
     unicode_str: &UnicodeString<impl Pod + HasCheckedAdd>,
 ) -> Result<String> {
-    if (unicode_str.length % 2) != 0 {
+    if !unicode_str.length.is_multiple_of(2) {
         return Err(Error::InvalidUnicodeString);
     }
 
@@ -46,9 +46,9 @@ fn read_unicode_string(
     })?)
 }
 
-fn try_read_unicode_string<P: HasCheckedAdd + Pod>(
+fn try_read_unicode_string(
     reader: &virt::Reader,
-    unicode_str: &UnicodeString<P>,
+    unicode_str: &UnicodeString<impl HasCheckedAdd + Pod>,
 ) -> Result<Option<String>> {
     ignore_non_fatal(read_unicode_string(reader, unicode_str))
 }
@@ -79,10 +79,10 @@ fn try_read_module_map<P: Pod + HasCheckedAdd>(
         // ..and read it. We first try to read `full_dll_name` but will try
         // `base_dll_name` is we couldn't read the former.
         let Some(dll_name) =
-            try_read_unicode_string::<P>(reader, &data.full_dll_name).and_then(|s| {
+            try_read_unicode_string(reader, &data.full_dll_name).and_then(|s| {
                 if s.is_none() {
                     // If we failed to read the `full_dll_name`, give `base_dll_name` a shot.
-                    try_read_unicode_string::<P>(reader, &data.base_dll_name)
+                    try_read_unicode_string(reader, &data.base_dll_name)
                 } else {
                     Ok(s)
                 }

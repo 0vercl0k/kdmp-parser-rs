@@ -38,7 +38,7 @@ impl<'parser> Reader<'parser> {
     }
 
     /// Read physical memory starting at `gpa` into a `buffer`.
-    pub fn read(&self, gpa: Gpa, buf: &mut [u8]) -> Result<usize> {
+    pub fn read_exact(&self, gpa: Gpa, buf: &mut [u8]) -> Result<()> {
         // Amount of bytes left to read.
         let mut amount_left = buf.len();
         // Total amount of bytes that we have successfully read.
@@ -48,10 +48,18 @@ impl<'parser> Reader<'parser> {
         // Let's try to read as much as the user wants.
         while amount_left > 0 {
             // Translate the gpa into a file offset..
-            // XXX: add a test
             let offset = match self.translate(addr) {
                 Ok(o) => o,
-                Err(Error::PageRead(_)) if total_read > 0 => return Ok(total_read),
+                Err(Error::PageRead(_)) if total_read > 0 => {
+                    return Err(Error::PartialRead {
+                        expected_amount: buf.len(),
+                        actual_amount: total_read,
+                        reason: PageReadError::NotInDump {
+                            gva: None,
+                            gpa: addr,
+                        },
+                    });
+                }
                 Err(e) => return Err(e),
             };
             // ..and seek the reader there.
@@ -76,26 +84,26 @@ impl<'parser> Reader<'parser> {
         }
 
         // Yay, we read as much bytes as the user wanted!
-        Ok(total_read)
+        Ok(())
     }
 
-    /// Read an exact amount of physical memory starting at `gpa` into a
-    /// `buffer`.
-    pub fn read_exact(&self, gpa: Gpa, buf: &mut [u8]) -> Result<bool> {
-        Ok(self.read(gpa, buf)? == buf.len())
+    pub fn read(&self, gpa: Gpa, buf: &mut [u8]) -> Result<usize> {
+        match self.read_exact(gpa, buf) {
+            Ok(()) => Ok(buf.len()),
+            Err(Error::PartialRead { actual_amount, .. }) => Ok(actual_amount),
+            Err(e) => Err(e),
+        }
     }
 
     /// Read a `T` from physical memory.
-    pub fn read_struct<T>(&self, gpa: Gpa) -> Result<Option<T>> {
+    pub fn read_struct<T>(&self, gpa: Gpa) -> Result<T> {
         let mut t: MaybeUninit<T> = MaybeUninit::uninit();
         let size_of_t = size_of_val(&t);
         let slice_over_t =
             unsafe { slice::from_raw_parts_mut(t.as_mut_ptr().cast::<u8>(), size_of_t) };
 
-        Ok(if self.read_exact(gpa, slice_over_t)? {
-            Some(unsafe { t.assume_init() })
-        } else {
-            None
-        })
+        self.read_exact(gpa, slice_over_t)?;
+
+        Ok(unsafe { t.assume_init() })
     }
 }

@@ -25,6 +25,7 @@ enum ReaderMode {
 #[command(version, about)]
 struct Args {
     /// The dump path.
+    #[arg(last = true)]
     dump_path: PathBuf,
     /// Dump the dump headers.
     #[arg(long, default_value_t = false)]
@@ -68,7 +69,7 @@ fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
         let wanted_left = wanted_len - i;
         // Do we need a full row or less?
         let left_to_display = min(wanted_left, 16);
-        print!("{:016x}: ", address + (i as u64 * 16));
+        print!("{:016x}: ", address + i as u64);
 
         // Iterate over the row now and populate it with the data. We do this because
         // the output first displays the hexadecimal value of every bytes, and then its
@@ -178,10 +179,11 @@ fn main() -> Result<()> {
             args.dtb
                 .unwrap_or(Gpa::new(parser.headers().directory_table_base)),
         );
+
         if addr == u64::MAX {
             for (gpa, _) in parser.physmem() {
                 phys_reader.read_exact(gpa, &mut buffer)?;
-                hexdump(gpa.u64(), &buffer, args.len)
+                hexdump(gpa.u64(), &buffer, args.len);
             }
         } else {
             let amount = if args.virt {

@@ -95,7 +95,7 @@ impl<'parser> Reader<'parser> {
     pub fn translate(&self, gva: Gva) -> Result<Translation> {
         let read_pxe = |gpa: Gpa, pxe: PxeKind| -> Result<Pxe> {
             let r = phys::Reader::new(self.parser);
-            let Some(pxe) = r.read_struct::<u64>(gpa)?.map(Pxe::from) else {
+            let Ok(pxe) = r.read_struct::<u64>(gpa).map(Pxe::from) else {
                 // If the physical page isn't in the dump, enrich the error by adding the gva
                 // that was getting translated as well as the pxe level we were at.
                 return Err(PageReadError::NotInDump {
@@ -281,7 +281,6 @@ impl<'parser> Reader<'parser> {
     }
 
     pub fn try_read_struct<T: Pod>(&self, gva: Gva) -> Result<Option<T>> {
-        // XXX: verify that there's no padding bytes in the Ts
         ignore_non_fatal(self.read_struct(gva))
     }
 }

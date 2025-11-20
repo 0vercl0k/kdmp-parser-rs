@@ -9,7 +9,7 @@ use std::sync::LazyLock;
 use kdmp_parser::error::{Error, PageReadError, PxeKind};
 use kdmp_parser::gxa::{Gpa, Gva};
 use kdmp_parser::parse::KernelDumpParser;
-use kdmp_parser::structs::{DumpType, ExceptionRecord64, PageKind};
+use kdmp_parser::structs::{DumpType, PageKind};
 use kdmp_parser::{phys, virt};
 use serde::Deserialize;
 
@@ -623,16 +623,13 @@ fn bug_10() {
         .read_exact(0x15cc6603908.into(), &mut buffer)
         .unwrap();
 
-    assert_eq!(
-        buffer,
-        [
-            0x43, 0x00, 0x3a, 0x00, 0x5c, 0x00, 0x57, 0x00, 0x69, 0x00, 0x6e, 0x00, 0x64, 0x00,
-            0x6f, 0x00, 0x77, 0x00, 0x73, 0x00, 0x5c, 0x00, 0x53, 0x00, 0x79, 0x00, 0x73, 0x00,
-            0x74, 0x00, 0x65, 0x00, 0x6d, 0x00, 0x33, 0x00, 0x32, 0x00, 0x5c, 0x00, 0x52, 0x00,
-            0x75, 0x00, 0x6e, 0x00, 0x74, 0x00, 0x69, 0x00, 0x6d, 0x00, 0x65, 0x00, 0x42, 0x00,
-            0x72, 0x00, 0x6f, 0x00, 0x6b, 0x00, 0x65, 0x00
-        ]
-    );
+    assert_eq!(buffer, [
+        0x43, 0x00, 0x3a, 0x00, 0x5c, 0x00, 0x57, 0x00, 0x69, 0x00, 0x6e, 0x00, 0x64, 0x00, 0x6f,
+        0x00, 0x77, 0x00, 0x73, 0x00, 0x5c, 0x00, 0x53, 0x00, 0x79, 0x00, 0x73, 0x00, 0x74, 0x00,
+        0x65, 0x00, 0x6d, 0x00, 0x33, 0x00, 0x32, 0x00, 0x5c, 0x00, 0x52, 0x00, 0x75, 0x00, 0x6e,
+        0x00, 0x74, 0x00, 0x69, 0x00, 0x6d, 0x00, 0x65, 0x00, 0x42, 0x00, 0x72, 0x00, 0x6f, 0x00,
+        0x6b, 0x00, 0x65, 0x00
+    ]);
 }
 
 #[test]
@@ -660,13 +657,10 @@ fn large_page() {
         .read_exact(Gva::new(0xfffff80122800000 + 0x100000 - 8), &mut buffer)
         .unwrap();
 
-    assert_eq!(
-        buffer,
-        [
-            0x70, 0x72, 0x05, 0x00, 0x04, 0x3a, 0x65, 0x00, 0x54, 0x3a, 0x65, 0x00, 0xbc, 0x82,
-            0x0c, 0x00
-        ]
-    );
+    assert_eq!(buffer, [
+        0x70, 0x72, 0x05, 0x00, 0x04, 0x3a, 0x65, 0x00, 0x54, 0x3a, 0x65, 0x00, 0xbc, 0x82, 0x0c,
+        0x00
+    ]);
 
     // Read from two straddling large pages.
     //
@@ -690,13 +684,10 @@ fn large_page() {
         .read_exact(Gva::new(0xfffff80122800000 + 0x200000 - 0x8), &mut buffer)
         .unwrap();
 
-    assert_eq!(
-        buffer,
-        [
-            0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
-            0xcc, 0xcc
-        ]
-    );
+    assert_eq!(buffer, [
+        0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+        0xcc
+    ]);
 
     // This is `@rsp` / stack memory.
     //
@@ -787,5 +778,48 @@ fn large_page() {
         Err(Error::PageRead(
             PageReadError::NotPresent { gva: fault_gva, which_pxe: PxeKind::Pte }
         )) if fault_gva == gva
+    ));
+}
+
+#[test]
+fn partial_phys() {
+    let parser = KernelDumpParser::new(WOW64_DUMP_PATH.as_path()).unwrap();
+    let phys_reader = phys::Reader::new(&parser);
+
+    let mut buffer = [0; 0x11];
+    // ```text
+    // kd> !db 0x14ff0 l10
+    // #   14ff0 00 00 00 00 00 00 00 00-00 00 00 00 00 00 00 00 ................
+    // kd> !db 0x15000 l1
+    // Physical memory read at 15000 failed
+    // ```
+    assert!(matches!(
+        phys_reader.read(0x14ff0.into(), &mut buffer),
+        Ok(0x10)
+    ));
+
+    assert!(matches!(
+        phys_reader.read_exact(0x14ff0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
+        Err(Error::PartialRead {
+            expected_amount,
+            actual_amount: 0x10,
+            reason: PageReadError::NotInDump { gva: None, gpa }
+        }) if expected_amount == buffer.len() && gpa == 0x15000.into()
+    ));
+
+    // ```text
+    // kd> !db 0000000000016000 - 10 l10
+    // Physical memory read at 15ff0 failed
+    // kd> !db 16000 l10
+    // #   16000 00 04 04 03 50 6e 70 5a-00 00 00 00 00 00 00 00 ....PnpZ........
+    // ```
+    assert!(matches!(
+        phys_reader.read(0x15ff0.into(), &mut buffer),
+        Err(Error::PageRead(PageReadError::NotInDump { gva: None, gpa })) if gpa == 0x15ff0.into()
+    ));
+
+    assert!(matches!(
+        phys_reader.read_exact(0x15ff0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
+        Err(Error::PageRead(PageReadError::NotInDump { gva: None, gpa })) if gpa == 0x15ff0.into()
     ));
 }
