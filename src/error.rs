@@ -1,13 +1,12 @@
 // Axel '0vercl0k' Souchet - March 19 2024
 //! This is the error type used across the codebase.
-use std::error::Error;
 use std::fmt::{self, Display};
 use std::io;
 use std::string::FromUtf16Error;
 
+use crate::gxa::{Gpa, Gva};
 use crate::structs::{DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP};
-use crate::{Gpa, Gva};
-pub type Result<R> = std::result::Result<R, KdmpParserError>;
+pub type Result<R> = std::result::Result<R, Error>;
 
 /// Identifies which page table entry level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +30,7 @@ pub enum PageReadError {
     },
 }
 
-impl Error for PageReadError {}
+impl std::error::Error for PageReadError {}
 
 /// Recoverable memory errors that can occur during memory reads.
 ///
@@ -64,7 +63,6 @@ impl Error for PageReadError {}
 /// We consider any of those errors 'recoverable' which means that we won't even
 /// bubble those up to the callers with the regular APIs. Only the `strict`
 /// versions will.
-
 impl Display for PageReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -85,42 +83,8 @@ impl Display for PageReadError {
     }
 }
 
-/// A read request was only partially fulfilled.
 #[derive(Debug)]
-pub struct PartialReadError {
-    pub expected_amount: usize,
-    pub actual_amount: usize,
-    pub reason: PageReadError,
-}
-
-impl PartialReadError {
-    pub fn new(expected_amount: usize, actual_amount: usize, reason: PageReadError) -> Self {
-        Self {
-            expected_amount,
-            actual_amount,
-            reason,
-        }
-    }
-}
-
-impl Error for PartialReadError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(&self.reason)
-    }
-}
-
-impl Display for PartialReadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "partially read {} bytes out of {} because of {}",
-            self.actual_amount, self.expected_amount, self.reason
-        )
-    }
-}
-
-#[derive(Debug)]
-pub enum KdmpParserError {
+pub enum Error {
     InvalidUnicodeString,
     Utf16(FromUtf16Error),
     Overflow(&'static str),
@@ -133,35 +97,33 @@ pub enum KdmpParserError {
     PhysAddrOverflow(u32, u64),
     PageOffsetOverflow(u32, u64),
     BitmapPageOffsetOverflow(u64, usize),
-    PartialRead(PartialReadError),
+    PartialRead {
+        expected_amount: usize,
+        actual_amount: usize,
+        reason: PageReadError,
+    },
     PageRead(PageReadError),
 }
 
-impl From<io::Error> for KdmpParserError {
+impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Self::Io(value)
     }
 }
 
-impl From<FromUtf16Error> for KdmpParserError {
+impl From<FromUtf16Error> for Error {
     fn from(value: FromUtf16Error) -> Self {
         Self::Utf16(value)
     }
 }
 
-impl From<PartialReadError> for KdmpParserError {
-    fn from(value: PartialReadError) -> Self {
-        Self::PartialRead(value)
-    }
-}
-
-impl From<PageReadError> for KdmpParserError {
+impl From<PageReadError> for Error {
     fn from(value: PageReadError) -> Self {
         Self::PageRead(value)
     }
 }
 
-impl Display for KdmpParserError {
+impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidUnicodeString => write!(f, "invalid UNICODE_STRING"),
@@ -191,18 +153,25 @@ impl Display for KdmpParserError {
                 f,
                 "overflow for page offset w/ bitmap_idx {bitmap_idx} bit_idx {bit_idx}"
             ),
-            Self::PartialRead(p) => write!(f, "partial read: {p}"),
+            Self::PartialRead {
+                expected_amount,
+                actual_amount,
+                reason,
+            } => write!(
+                f,
+                "partially read {actual_amount} bytes out of {expected_amount} because of {reason}"
+            ),
             Self::PageRead(p) => write!(f, "page read: {p}"),
         }
     }
 }
 
-impl Error for KdmpParserError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Utf16(u) => Some(u),
             Self::Io(e) => Some(e),
-            Self::PartialRead(PartialReadError { reason, .. }) => Some(reason),
+            Self::PartialRead { reason, .. } => Some(reason),
             _ => None,
         }
     }

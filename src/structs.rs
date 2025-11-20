@@ -2,13 +2,11 @@
 //! This has all the raw structures that makes up Windows kernel crash-dumps.
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::io::SeekFrom;
-use std::mem::MaybeUninit;
-use std::slice;
 
-use crate::error::Result;
-use crate::{Gpa, KdmpParserError, Reader};
+use crate::error::{Error, Result};
+use crate::gxa::Gpa;
 
+// XXX: figure the rules
 // The rules are:
 // 1/ no padding bytes (otherwise you could potentially leak memory)
 // 2/ no invalid bit patterns
@@ -72,7 +70,7 @@ pub enum DumpType {
 pub type PhysmemMap = BTreeMap<Gpa, u64>;
 
 impl TryFrom<u32> for DumpType {
-    type Error = KdmpParserError;
+    type Error = Error;
 
     fn try_from(value: u32) -> Result<Self> {
         match value {
@@ -82,7 +80,7 @@ impl TryFrom<u32> for DumpType {
             x if x == DumpType::KernelAndUserMemory as u32 => Ok(DumpType::KernelAndUserMemory),
             x if x == DumpType::CompleteMemory as u32 => Ok(DumpType::CompleteMemory),
             x if x == DumpType::LiveKernelMemory as u32 => Ok(DumpType::LiveKernelMemory),
-            _ => Err(KdmpParserError::UnknownDumpType(value)),
+            _ => Err(Error::UnknownDumpType(value)),
         }
     }
 }
@@ -213,6 +211,7 @@ pub struct BmpHeader64 {
 unsafe impl Pod for BmpHeader64 {}
 
 impl BmpHeader64 {
+    #[must_use]
     pub fn looks_good(&self) -> bool {
         (self.signature == BMPHEADER64_EXPECTED_SIGNATURE
             || self.signature == BMPHEADER64_EXPECTED_SIGNATURE2)
@@ -255,12 +254,12 @@ pub struct PhysmemDesc {
 unsafe impl Pod for PhysmemDesc {}
 
 impl TryFrom<&[u8]> for PhysmemDesc {
-    type Error = KdmpParserError;
+    type Error = Error;
 
     fn try_from(slice: &[u8]) -> Result<Self> {
         let expected_len = size_of::<Self>();
         if slice.len() < expected_len {
-            return Err(KdmpParserError::InvalidData("physmem desc is too small"));
+            return Err(Error::InvalidData("physmem desc is too small"));
         }
 
         let number_of_runs = u32::from_le_bytes((&slice[0..4]).try_into().unwrap());
@@ -406,29 +405,6 @@ impl Debug for Context {
     }
 }
 
-/// Peek for a `T` from the cursor.
-pub fn peek_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
-    let mut s: MaybeUninit<T> = MaybeUninit::uninit();
-    let size_of_s = size_of_val(&s);
-    let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr().cast::<u8>(), size_of_s) };
-
-    let pos = reader.stream_position()?;
-    reader.read_exact(slice_over_s)?;
-    reader.seek(SeekFrom::Start(pos))?;
-
-    Ok(unsafe { s.assume_init() })
-}
-
-/// Read a `T` from the cursor.
-pub fn read_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
-    let s = peek_struct(reader)?;
-    let size_of_s = size_of_val(&s);
-
-    reader.seek(SeekFrom::Current(size_of_s.try_into().unwrap()))?;
-
-    Ok(s)
-}
-
 const RDMP_HEADER64_EXPECTED_MARKER: u32 = 0x40;
 const RDMP_HEADER64_EXPECTED_SIGNATURE: u32 = 0x50_4D_44_52; // 'PMDR'
 const RDMP_HEADER64_EXPECTED_VALID_DUMP: u32 = 0x50_4D_55_44; // 'PMUD'
@@ -446,6 +422,7 @@ pub struct RdmpHeader64 {
 }
 
 impl RdmpHeader64 {
+    #[must_use]
     pub fn looks_good(&self) -> bool {
         if self.marker != RDMP_HEADER64_EXPECTED_MARKER {
             return false;

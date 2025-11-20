@@ -3,12 +3,12 @@ use core::slice;
 use std::cmp::min;
 use std::mem::MaybeUninit;
 
-use crate::error::{PartialReadError, Result};
-use crate::structs::Pod;
-use crate::{
-    Gpa, Gva, Gxa, KdmpParserError, KernelDumpParser, PageKind, PageReadError, Pfn, Pxe, PxeKind,
-    phys,
-};
+use crate::error::{Error, PageReadError, PxeKind, Result};
+use crate::gxa::{Gpa, Gva, Gxa};
+use crate::parse::KernelDumpParser;
+use crate::phys;
+use crate::pxe::{Pfn, Pxe};
+use crate::structs::{PageKind, Pod};
 
 /// The details related to a virtual to physical address translation.
 ///
@@ -70,7 +70,7 @@ impl Translation {
 pub fn ignore_non_fatal<T>(r: Result<T>) -> Result<Option<T>> {
     match r {
         Ok(o) => Ok(Some(o)),
-        Err(KdmpParserError::PageRead(_) | KdmpParserError::PartialRead(_)) => Ok(None),
+        Err(Error::PageRead(_) | Error::PartialRead { .. }) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -177,9 +177,7 @@ impl<'parser> Reader<'parser> {
     pub fn read(&self, gva: Gva, buf: &mut [u8]) -> Result<usize> {
         match self.read_exact(gva, buf) {
             Ok(()) => Ok(buf.len()),
-            Err(KdmpParserError::PartialRead(PartialReadError { actual_amount, .. })) => {
-                Ok(actual_amount)
-            }
+            Err(Error::PartialRead { actual_amount, .. }) => Ok(actual_amount),
             Err(e) => Err(e),
         }
     }
@@ -202,13 +200,12 @@ impl<'parser> Reader<'parser> {
             let translation = match self.translate(addr) {
                 Ok(t) => t,
                 // If we already read some bytes, and it's a non fatal error let's stop here..
-                Err(KdmpParserError::PageRead(reason)) if total_read > 0 => {
-                    return Err(PartialReadError {
+                Err(Error::PageRead(reason)) if total_read > 0 => {
+                    return Err(Error::PartialRead {
                         expected_amount: buf.len(),
                         actual_amount: total_read,
                         reason,
-                    }
-                    .into());
+                    });
                 }
                 // ..otherwise this is an error.
                 Err(e) => return Err(e),
@@ -228,7 +225,7 @@ impl<'parser> Reader<'parser> {
             let gpa = translation.gpa();
             let amount_read = match phys::Reader::new(self.parser).read(gpa, slice) {
                 Ok(n) => n,
-                Err(KdmpParserError::PageRead(e)) => {
+                Err(Error::PageRead(e)) => {
                     // If we got a `MemoryRead`, then `phys::Reader::read` can only fail if there's
                     // no backing page found; let's ensure that.
                     debug_assert!(matches!(e, PageReadError::NotInDump { gva: None, .. }));
@@ -240,7 +237,11 @@ impl<'parser> Reader<'parser> {
                     };
 
                     return Err(if total_read > 0 {
-                        PartialReadError::new(buf.len(), total_read, reason).into()
+                        Error::PartialRead {
+                            expected_amount: total_read,
+                            actual_amount: buf.len(),
+                            reason,
+                        }
                     } else {
                         reason.into()
                     });

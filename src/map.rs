@@ -6,6 +6,8 @@ use std::fs::File;
 use std::io::{self, Cursor, Read, Seek};
 use std::path::Path;
 
+// XXX: use [cfg_select](https://github.com/rust-lang/rust/issues/115585#issue-1882997206) when it's stabilized.
+
 pub trait Reader: Read + Seek {}
 
 impl<T> Reader for T where T: Read + Seek {}

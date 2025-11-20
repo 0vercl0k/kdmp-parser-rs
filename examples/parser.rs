@@ -7,7 +7,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use kdmp_parser::{Gpa, Gva, Gxa, KernelDumpParser, MappedFileReader};
+use kdmp_parser::gxa::{Gpa, Gva, Gxa};
+use kdmp_parser::map::MappedFileReader;
+use kdmp_parser::parse::KernelDumpParser;
+use kdmp_parser::{phys, virt};
 
 #[derive(Debug, Default, Clone, Copy, ValueEnum)]
 enum ReaderMode {
@@ -169,24 +172,25 @@ fn main() -> Result<()> {
     if let Some(addr) = args.mem {
         let mut buffer = vec![0; args.len];
         let addr = to_hex(&addr)?;
+        let phys_reader = phys::Reader::new(&parser);
+        let virt_reader = virt::Reader::with_dtb(
+            &parser,
+            args.dtb
+                .unwrap_or(Gpa::new(parser.headers().directory_table_base)),
+        );
         if addr == u64::MAX {
             for (gpa, _) in parser.physmem() {
-                parser.phys_read_exact(gpa, &mut buffer)?;
+                phys_reader.read_exact(gpa, &mut buffer)?;
                 hexdump(gpa.u64(), &buffer, args.len)
             }
         } else {
             let amount = if args.virt {
-                parser.virt_read_with_dtb(
-                    Gva::new(addr),
-                    &mut buffer,
-                    args.dtb
-                        .unwrap_or(Gpa::new(parser.headers().directory_table_base)),
-                )
+                virt_reader.read(Gva::new(addr), &mut buffer)
             } else {
-                parser.phys_read(Gpa::new(addr), &mut buffer).map(Some)
-            }?;
+                phys_reader.read(Gpa::new(addr), &mut buffer)
+            };
 
-            if let Some(amount) = amount {
+            if let Ok(amount) = amount {
                 hexdump(addr, &buffer[..amount], args.len);
             } else {
                 println!(

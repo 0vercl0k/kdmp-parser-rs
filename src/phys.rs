@@ -4,7 +4,10 @@ use std::cmp::min;
 use std::io::SeekFrom;
 use std::mem::MaybeUninit;
 
-use crate::{Gpa, Gxa, KdmpParserError, KernelDumpParser, PageKind, PageReadError, Result};
+use crate::error::{Error, PageReadError, Result};
+use crate::gxa::{Gpa, Gxa};
+use crate::parse::KernelDumpParser;
+use crate::structs::PageKind;
 
 pub struct Reader<'parser> {
     parser: &'parser KernelDumpParser,
@@ -31,7 +34,7 @@ impl<'parser> Reader<'parser> {
         base_offset
             .checked_add(gpa.offset())
             .map(SeekFrom::Start)
-            .ok_or(KdmpParserError::Overflow("w/ gpa offset"))
+            .ok_or(Error::Overflow("w/ gpa offset"))
     }
 
     /// Read physical memory starting at `gpa` into a `buffer`.
@@ -48,7 +51,7 @@ impl<'parser> Reader<'parser> {
             // XXX: add a test
             let offset = match self.translate(addr) {
                 Ok(o) => o,
-                Err(KdmpParserError::PageRead(_)) if total_read > 0 => return Ok(total_read),
+                Err(Error::PageRead(_)) if total_read > 0 => return Ok(total_read),
                 Err(e) => return Err(e),
             };
             // ..and seek the reader there.

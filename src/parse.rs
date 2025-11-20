@@ -1,25 +1,30 @@
 // Axel '0vercl0k' Souchet - February 25 2024
 //! This has all the parsing logic for parsing kernel crash-dumps.
+use core::slice;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::fs::File;
+use std::io::SeekFrom;
+use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::path::Path;
 use std::{io, mem};
 
 use crate::bits::Bits;
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::gxa::{Gpa, Gva};
 use crate::map::{MappedFileReader, Reader};
+use crate::pxe::Pfn;
 use crate::structs::{
     BmpHeader64, Context, DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
     DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, KdDebuggerData64, KernelRdmpHeader64,
-    PageKind, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun, read_struct,
+    PageKind, PfnRange, PhysmemDesc, PhysmemMap, PhysmemRun, Pod,
 };
+use crate::virt;
 use crate::virt_utils::{
     ModuleMap, try_extract_kernel_modules, try_extract_user_modules, try_find_prcb,
 };
-use crate::{Gpa, Gva, KdmpParserError, Pfn, virt};
 
 fn gpa_from_bitmap(bitmap_idx: u64, bit_idx: usize) -> Option<Gpa> {
     let pfn = Pfn::new(
@@ -35,6 +40,30 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
     let offset = page_idx.checked_mul(PageKind::Normal.size())?;
 
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
+}
+
+/// Peek for a `T` from the cursor.
+/// XXX: why do we need peek?
+fn peek_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
+    let mut s: MaybeUninit<T> = MaybeUninit::uninit();
+    let size_of_s = size_of_val(&s);
+    let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr().cast::<u8>(), size_of_s) };
+
+    let pos = reader.stream_position()?;
+    reader.read_exact(slice_over_s)?;
+    reader.seek(SeekFrom::Start(pos))?;
+
+    Ok(unsafe { s.assume_init() })
+}
+
+/// Read a `T` from the cursor.
+fn read_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
+    let s = peek_struct(reader)?;
+    let size_of_s = size_of_val(&s);
+
+    reader.seek(SeekFrom::Current(size_of_s.try_into().unwrap()))?;
+
+    Ok(s)
 }
 
 /// A kernel dump parser that gives access to the physical memory space stored
@@ -81,11 +110,11 @@ impl KernelDumpParser {
         // Parse the dump header and check if things look right.
         let headers = Box::new(read_struct::<Header64>(&mut reader)?);
         if headers.signature != DUMP_HEADER64_EXPECTED_SIGNATURE {
-            return Err(KdmpParserError::InvalidSignature(headers.signature));
+            return Err(Error::InvalidSignature(headers.signature));
         }
 
         if headers.valid_dump != DUMP_HEADER64_EXPECTED_VALID_DUMP {
-            return Err(KdmpParserError::InvalidValidDump(headers.valid_dump));
+            return Err(Error::InvalidValidDump(headers.valid_dump));
         }
 
         // Grab the dump type and make sure it is one we support.
@@ -252,17 +281,17 @@ impl KernelDumpParser {
                 // Calculate the physical address.
                 let phys_addr = run
                     .phys_addr(page_idx)
-                    .ok_or(KdmpParserError::PhysAddrOverflow(run_idx, page_idx))?;
+                    .ok_or(Error::PhysAddrOverflow(run_idx, page_idx))?;
 
                 // We now know where this page lives at, insert it into the physmem map.
                 if physmem.insert(phys_addr, page_offset).is_some() {
-                    return Err(KdmpParserError::DuplicateGpa(phys_addr));
+                    return Err(Error::DuplicateGpa(phys_addr));
                 }
 
                 // Move the page offset along.
                 page_offset = page_offset
                     .checked_add(PageKind::Normal.size())
-                    .ok_or(KdmpParserError::PageOffsetOverflow(run_idx, page_idx))?;
+                    .ok_or(Error::PageOffsetOverflow(run_idx, page_idx))?;
             }
         }
 
@@ -273,9 +302,7 @@ impl KernelDumpParser {
     fn bmp_physmem(reader: &mut impl Reader) -> Result<PhysmemMap> {
         let bmp_header = read_struct::<BmpHeader64>(reader)?;
         if !bmp_header.looks_good() {
-            return Err(KdmpParserError::InvalidData(
-                "bmp header doesn't look right",
-            ));
+            return Err(Error::InvalidData("bmp header doesn't look right"));
         }
 
         let remaining_bits = bmp_header.pages % 8;
@@ -304,14 +331,14 @@ impl KernelDumpParser {
                 }
 
                 // Calculate where the page is.
-                let pa = gpa_from_bitmap(bitmap_idx, bit_idx)
-                    .ok_or(KdmpParserError::Overflow("pfn in bitmap"))?;
+                let pa =
+                    gpa_from_bitmap(bitmap_idx, bit_idx).ok_or(Error::Overflow("pfn in bitmap"))?;
 
                 let insert = physmem.insert(pa, page_offset);
                 debug_assert!(insert.is_none());
-                page_offset = page_offset.checked_add(PageKind::Normal.size()).ok_or(
-                    KdmpParserError::BitmapPageOffsetOverflow(bitmap_idx, bit_idx),
-                )?;
+                page_offset = page_offset
+                    .checked_add(PageKind::Normal.size())
+                    .ok_or(Error::BitmapPageOffsetOverflow(bitmap_idx, bit_idx))?;
             }
         }
 
@@ -327,9 +354,7 @@ impl KernelDumpParser {
             D::KernelMemory | D::KernelAndUserMemory => {
                 let kernel_hdr = read_struct::<KernelRdmpHeader64>(reader)?;
                 if !kernel_hdr.hdr.looks_good() {
-                    return Err(KdmpParserError::InvalidData(
-                        "RdmpHeader64 doesn't look right",
-                    ));
+                    return Err(Error::InvalidData("RdmpHeader64 doesn't look right"));
                 }
 
                 (
@@ -341,9 +366,7 @@ impl KernelDumpParser {
             D::CompleteMemory => {
                 let full_hdr = read_struct::<FullRdmpHeader64>(reader)?;
                 if !full_hdr.hdr.looks_good() {
-                    return Err(KdmpParserError::InvalidData(
-                        "FullRdmpHeader64 doesn't look right",
-                    ));
+                    return Err(Error::InvalidData("FullRdmpHeader64 doesn't look right"));
                 }
 
                 (
@@ -356,16 +379,12 @@ impl KernelDumpParser {
         };
 
         if page_offset == 0 || metadata_size == 0 {
-            return Err(KdmpParserError::InvalidData(
-                "no first page or metadata size",
-            ));
+            return Err(Error::InvalidData("no first page or metadata size"));
         }
 
         let pfn_range_size = mem::size_of::<PfnRange>();
         if (metadata_size % pfn_range_size as u64) != 0 {
-            return Err(KdmpParserError::InvalidData(
-                "metadata size is not a multiple of 8",
-            ));
+            return Err(Error::InvalidData("metadata size is not a multiple of 8"));
         }
 
         let number_pfns = metadata_size / pfn_range_size as u64;
@@ -380,9 +399,7 @@ impl KernelDumpParser {
                 }
 
                 if page_count > total_number_of_pages {
-                    return Err(KdmpParserError::InvalidData(
-                        "page_count > total_number_of_pages",
-                    ));
+                    return Err(Error::InvalidData("page_count > total_number_of_pages"));
                 }
             }
 
@@ -393,17 +410,17 @@ impl KernelDumpParser {
 
             for page_idx in 0..pfn_range.number_of_pages {
                 let gpa = gpa_from_pfn_range(&pfn_range, page_idx)
-                    .ok_or(KdmpParserError::Overflow("w/ pfn_range"))?;
+                    .ok_or(Error::Overflow("w/ pfn_range"))?;
                 let insert = physmem.insert(gpa, page_offset);
                 debug_assert!(insert.is_none());
                 page_offset = page_offset
                     .checked_add(PageKind::Normal.size())
-                    .ok_or(KdmpParserError::Overflow("w/ page_offset"))?;
+                    .ok_or(Error::Overflow("w/ page_offset"))?;
             }
 
             page_count = page_count
                 .checked_add(pfn_range.number_of_pages)
-                .ok_or(KdmpParserError::Overflow("w/ page_count"))?;
+                .ok_or(Error::Overflow("w/ page_count"))?;
         }
 
         Ok(physmem)

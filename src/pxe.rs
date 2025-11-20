@@ -5,7 +5,7 @@
 //! # Examples
 //!
 //! ```
-//! # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+//! # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
 //! let pxe = Pxe::new(
 //!     Pfn::new(0x6d600),
 //!     PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT
@@ -15,7 +15,8 @@
 //! ```
 use std::ops::{BitOr, Deref};
 
-use crate::{Bits, Gpa};
+use crate::bits::Bits;
+use crate::gxa::Gpa;
 
 /// The various bits and flags that a [`Pxe`] has.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Default, PartialOrd, Ord)]
@@ -110,7 +111,8 @@ impl Deref for PxeFlags {
 /// # Examples
 ///
 /// ```
-/// # use kdmp_parser::{Pfn, Gpa};
+/// # use kdmp_parser::gxa::Gpa;
+/// # use kdmp_parser::pxe::Pfn;
 /// # fn main() {
 /// let pfn = Pfn::new(0x1337);
 /// assert_eq!(pfn.gpa(), Gpa::new(0x1337000));
@@ -168,7 +170,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let pxe = Pxe::new(
     ///     Pfn::new(0x6d600),
@@ -187,7 +189,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let p = Pxe::new(
     ///     Pfn::new(0x6d600),
@@ -211,7 +213,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let p = Pxe::new(
     ///     Pfn::new(0x6d600),
@@ -235,7 +237,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let p = Pxe::from(0x166B7880);
     /// let np = Pxe::from(0xA000000077AF867);
@@ -253,7 +255,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let w = Pxe::from(0x2709063);
     /// let ro = Pxe::from(0x8A00000002C001A1);
@@ -271,7 +273,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let x = Pxe::from(0x270a063);
     /// let nx = Pxe::from(0x8A00000002C001A1);
@@ -289,7 +291,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let u = Pxe::from(0x8000000F34E5025);
     /// let s = Pxe::from(0x270A063);
@@ -310,7 +312,7 @@ impl From<u64> for Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let pxe = Pxe::from(0x6D_60_00_25);
     /// assert_eq!(pxe.pfn.u64(), 0x6d600);
@@ -334,7 +336,7 @@ impl From<Pxe> for u64 {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let pxe = Pxe::new(
     ///     Pfn::new(0x6d600),

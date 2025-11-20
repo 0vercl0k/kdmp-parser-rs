@@ -8,7 +8,7 @@
 //! # Examples
 //!
 //! ```
-//! use kdmp_parser::{Gxa, Gva};
+//! use kdmp_parser::gxa::{Gxa, Gva};
 //! let gva = Gva::new(1337);
 //! let page_aligned_gva = gva.page_align();
 //! let page_offset = gva.offset();
@@ -61,7 +61,7 @@ pub trait Gxa: Sized + Default + Copy + From<u64> {
 /// # Examples
 ///
 /// ```
-/// # use kdmp_parser::{Gxa, Gpa};
+/// # use kdmp_parser::gxa::{Gxa, Gpa};
 /// # fn main() {
 /// let gpa = Gpa::new(0x1337_123);
 /// assert_eq!(gpa.offset(), 0x123);
@@ -82,7 +82,7 @@ impl Gpa {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa};
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::new(1337);
     /// # }
@@ -97,7 +97,8 @@ impl Gpa {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa, Pfn};
+    /// # use kdmp_parser::pxe::Pfn;
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::from_pfn(Pfn::new(0x1337));
     /// assert_eq!(gpa.u64(), 0x1337_000);
@@ -114,7 +115,8 @@ impl Gpa {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa, Pfn};
+    /// # use kdmp_parser::pxe::Pfn;
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::from_pfn_with_offset(Pfn::new(0x1337), 0x11);
     /// assert_eq!(gpa.u64(), 0x1337_011);
@@ -132,7 +134,7 @@ impl Gpa {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa};
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::new(0x1337_337);
     /// assert_eq!(gpa.pfn(), 0x1337);
@@ -157,7 +159,7 @@ impl Gxa for Gpa {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa};
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::new(1337);
     /// assert_eq!(gpa.u64(), 1337);
@@ -175,7 +177,7 @@ impl From<u64> for Gpa {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa};
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::from(0xdeadbeef_baadc0de);
     /// assert_eq!(u64::from(gpa), 0xdeadbeef_baadc0de);
@@ -193,7 +195,7 @@ impl From<Gpa> for u64 {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa};
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::new(0xdeadbeef_baadc0de);
     /// let gpa_u64: u64 = gpa.into();
@@ -213,7 +215,7 @@ impl From<&Gpa> for u64 {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa};
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::new(0xdeadbeef_baadc0de);
     /// let gpa_p = &gpa;
@@ -253,7 +255,7 @@ impl FromStr for Gpa {
 /// # Examples
 ///
 /// ```
-/// # use kdmp_parser::{Gxa, Gva};
+/// # use kdmp_parser::gxa::{Gxa, Gva};
 /// # fn main() {
 /// let gva = Gva::new(0x1337_fff);
 /// assert_eq!(gva.offset(), 0xfff);
@@ -274,7 +276,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::{Gxa, Gva};
     /// # fn main() {
     /// let gva = Gva::new(0xdeadbeef);
     /// # }
@@ -289,7 +291,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::{Gxa, Gva};
     /// # fn main() {
     /// let first = Gva::new(0xff_ff_b9_dc_ee_77_31_37);
     /// assert_eq!(first.pte_idx(), 371);
@@ -308,7 +310,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::{Gxa, Gva};
     /// # fn main() {
     /// let first = Gva::new(0xff_ff_b9_dc_ee_77_31_37);
     /// assert_eq!(first.pde_idx(), 371);
@@ -327,7 +329,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::{Gxa, Gva};
     /// # fn main() {
     /// let first = Gva::new(0xff_ff_b9_dc_ee_77_31_37);
     /// assert_eq!(first.pdpe_idx(), 371);
@@ -345,7 +347,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::{Gxa, Gva};
     /// # fn main() {
     /// let first = Gva::new(0xff_ff_b9_dc_ee_77_31_37);
     /// assert_eq!(first.pml4e_idx(), 371);
@@ -372,7 +374,7 @@ impl Gxa for Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::{Gxa, Gva};
     /// # fn main() {
     /// let gva = Gva::new(0xdeadbeef);
     /// assert_eq!(gva.u64(), 0xdeadbeef);
@@ -390,7 +392,7 @@ impl From<u64> for Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::{Gxa, Gva};
     /// # fn main() {
     /// let gva = Gva::from(0xbaadc0de_deadbeef);
     /// assert_eq!(u64::from(gva), 0xbaadc0de_deadbeef);
@@ -408,7 +410,7 @@ impl From<Gva> for u64 {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::{Gxa, Gva};
     /// # fn main() {
     /// let gva = Gva::new(0xbaadc0de_deadbeef);
     /// let gva_u64: u64 = gva.into();
@@ -428,7 +430,7 @@ impl From<&Gva> for u64 {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Gxa, Gpa};
+    /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gva = Gpa::new(0xbaadc0de_deadbeef);
     /// let gva_p = &gva;

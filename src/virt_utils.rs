@@ -1,17 +1,17 @@
 // Axel '0vercl0k' Souchet - November 11 2025
-
 use core::slice;
 use std::collections::HashMap;
 use std::ops::Range;
 
-use crate::error::Result;
-use crate::structs::{KdDebuggerData64, LdrDataTableEntry, ListEntry, Pod, UnicodeString};
-use crate::virt::ignore_non_fatal;
-use crate::{Context, Gva, Gxa, KdmpParserError, KernelDumpParser, virt};
+use crate::error::{Error, Result};
+use crate::gxa::{Gva, Gxa};
+use crate::parse::KernelDumpParser;
+use crate::structs::{Context, KdDebuggerData64, LdrDataTableEntry, ListEntry, Pod, UnicodeString};
+use crate::virt::{self, ignore_non_fatal};
 
 /// This trait is used to implement generic behavior when reading pointers that
 /// could be either 32/64-bit (think Wow64).
-pub trait HasCheckedAdd: Sized + Copy + Into<u64> + From<u32> {
+trait HasCheckedAdd: Sized + Copy + Into<u64> + From<u32> {
     fn checked_add(self, rhs: Self) -> Option<Self>;
 }
 
@@ -28,12 +28,12 @@ macro_rules! impl_checked_add {
 impl_checked_add!(u32, u64);
 
 /// Read a `UNICODE_STRING`. Returns `None` if a memory error occurs.
-fn read_unicode_string<P: HasCheckedAdd + Pod>(
+fn read_unicode_string(
     reader: &virt::Reader,
-    unicode_str: &UnicodeString<P>,
+    unicode_str: &UnicodeString<impl Pod + HasCheckedAdd>,
 ) -> Result<String> {
     if (unicode_str.length % 2) != 0 {
-        return Err(KdmpParserError::InvalidUnicodeString);
+        return Err(Error::InvalidUnicodeString);
     }
 
     let mut buffer = vec![0; unicode_str.length.into()];
@@ -95,7 +95,7 @@ fn try_read_module_map<P: Pod + HasCheckedAdd>(
         let dll_end_addr = data
             .dll_base
             .checked_add(data.size_of_image.into())
-            .ok_or(KdmpParserError::Overflow("module address"))?;
+            .ok_or(Error::Overflow("module address"))?;
         let at = Gva::new(data.dll_base.into())..Gva::new(dll_end_addr.into());
         let inserted = modules.insert(at, dll_name);
         debug_assert!(inserted.is_none());
@@ -108,7 +108,7 @@ fn try_read_module_map<P: Pod + HasCheckedAdd>(
 }
 
 /// Extract the drivers / modules out of the `PsLoadedModuleList`.
-pub fn try_extract_kernel_modules(parser: &KernelDumpParser) -> Result<Option<ModuleMap>> {
+pub(crate) fn try_extract_kernel_modules(parser: &KernelDumpParser) -> Result<Option<ModuleMap>> {
     // Walk the LIST_ENTRY!
     try_read_module_map::<u64>(
         &virt::Reader::new(parser),
@@ -118,7 +118,7 @@ pub fn try_extract_kernel_modules(parser: &KernelDumpParser) -> Result<Option<Mo
 
 /// Try to find the right `nt!_KPRCB` by walking them and finding one that has
 /// the same `Rsp` than in the dump headers' context.
-pub fn try_find_prcb(
+pub(crate) fn try_find_prcb(
     parser: &KernelDumpParser,
     kd_debugger_data_block: &KdDebuggerData64,
 ) -> Result<Option<Gva>> {
@@ -133,7 +133,7 @@ pub fn try_find_prcb(
         // Calculate the address of where the CONTEXT pointer is at..
         let kprcb_context_addr = kprcb_addr
             .checked_add(kd_debugger_data_block.offset_prcb_context.into())
-            .ok_or(KdmpParserError::Overflow("offset_prcb"))?;
+            .ok_or(Error::Overflow("offset_prcb"))?;
 
         // ..and read it.
         let Some(kprcb_context_addr) = reader.try_read_struct::<u64>(kprcb_context_addr.into())?
@@ -158,7 +158,7 @@ pub fn try_find_prcb(
         // Otherwise, let's move on to the next pointer.
         processor_block = processor_block
             .checked_add(size_of::<u64>() as _)
-            .ok_or(KdmpParserError::Overflow("kprcb ptr"))?;
+            .ok_or(Error::Overflow("kprcb ptr"))?;
     }
 
     Ok(None)
@@ -166,7 +166,7 @@ pub fn try_find_prcb(
 
 /// Extract the user modules list by grabbing the current thread from the KPRCB.
 /// Then, walk the `PEB.Ldr.InLoadOrderModuleList`.
-pub fn try_extract_user_modules(
+pub(crate) fn try_extract_user_modules(
     reader: &virt::Reader,
     kd_debugger_data_block: &KdDebuggerData64,
     prcb_addr: Gva,
@@ -175,7 +175,7 @@ pub fn try_extract_user_modules(
     let kthread_addr = prcb_addr
         .u64()
         .checked_add(kd_debugger_data_block.offset_prcb_current_thread.into())
-        .ok_or(KdmpParserError::Overflow("offset prcb current thread"))?;
+        .ok_or(Error::Overflow("offset prcb current thread"))?;
     let Some(kthread_addr) = reader.try_read_struct::<u64>(kthread_addr.into())? else {
         return Ok(None);
     };
@@ -183,7 +183,7 @@ pub fn try_extract_user_modules(
     // ..then its TEB..
     let teb_addr = kthread_addr
         .checked_add(kd_debugger_data_block.offset_kthread_teb.into())
-        .ok_or(KdmpParserError::Overflow("offset kthread teb"))?;
+        .ok_or(Error::Overflow("offset kthread teb"))?;
     let Some(teb_addr) = reader.try_read_struct::<u64>(teb_addr.into())? else {
         return Ok(None);
     };
@@ -201,7 +201,7 @@ pub fn try_extract_user_modules(
     let peb_offset = 0x60;
     let peb_addr = teb_addr
         .checked_add(peb_offset)
-        .ok_or(KdmpParserError::Overflow("peb offset"))?;
+        .ok_or(Error::Overflow("peb offset"))?;
     let Some(peb_addr) = reader.try_read_struct::<u64>(peb_addr.into())? else {
         return Ok(None);
     };
@@ -214,7 +214,7 @@ pub fn try_extract_user_modules(
     let ldr_offset = 0x18;
     let peb_ldr_addr = peb_addr
         .checked_add(ldr_offset)
-        .ok_or(KdmpParserError::Overflow("ldr offset"))?;
+        .ok_or(Error::Overflow("ldr offset"))?;
     let Some(peb_ldr_addr) = reader.try_read_struct::<u64>(peb_ldr_addr.into())? else {
         return Ok(None);
     };
@@ -227,9 +227,7 @@ pub fn try_extract_user_modules(
     let in_load_order_module_list_offset = 0x10;
     let module_list_entry_addr = peb_ldr_addr
         .checked_add(in_load_order_module_list_offset)
-        .ok_or(KdmpParserError::Overflow(
-            "in load order module list offset",
-        ))?;
+        .ok_or(Error::Overflow("in load order module list offset"))?;
 
     // From there, we walk the list!
     let Some(mut modules) = try_read_module_map::<u64>(reader, module_list_entry_addr.into())?
@@ -248,11 +246,11 @@ pub fn try_extract_user_modules(
     let teb32_offset = 0x2_000;
     let teb32_addr = teb_addr
         .checked_add(teb32_offset)
-        .ok_or(KdmpParserError::Overflow("teb32 offset"))?;
+        .ok_or(Error::Overflow("teb32 offset"))?;
     let peb32_offset = 0x30;
     let peb32_addr = teb32_addr
         .checked_add(peb32_offset)
-        .ok_or(KdmpParserError::Overflow("peb32 offset"))?;
+        .ok_or(Error::Overflow("peb32 offset"))?;
     let Some(peb32_addr) = reader.try_read_struct::<u32>(peb32_addr.into())? else {
         return Ok(Some(modules));
     };
@@ -265,7 +263,7 @@ pub fn try_extract_user_modules(
     let ldr_offset = 0x0c;
     let peb32_ldr_addr = peb32_addr
         .checked_add(ldr_offset)
-        .ok_or(KdmpParserError::Overflow("ldr32 offset"))?;
+        .ok_or(Error::Overflow("ldr32 offset"))?;
     let Some(peb32_ldr_addr) = reader.try_read_struct::<u32>(Gva::new(peb32_ldr_addr.into()))?
     else {
         return Ok(Some(modules));
@@ -279,9 +277,7 @@ pub fn try_extract_user_modules(
     let in_load_order_module_list_offset = 0xc;
     let module_list_entry_addr = peb32_ldr_addr
         .checked_add(in_load_order_module_list_offset)
-        .ok_or(KdmpParserError::Overflow(
-            "in load order module list offset",
-        ))?;
+        .ok_or(Error::Overflow("in load order module list offset"))?;
 
     // From there, we walk the list!
     let Some(modules32) =

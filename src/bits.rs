@@ -5,7 +5,7 @@
 //! //! # Examples
 //!
 //! ```
-//! # use kdmp_parser::Bits;
+//! # use kdmp_parser::bits::Bits;
 //! let v = 0xAB_CD_EF_01_23_45_67_89u64;
 //! assert_eq!(v.bits(0..=63), v);
 //! assert_eq!(v.bits(0..=55), 0xCD_EF_01_23_45_67_89);
