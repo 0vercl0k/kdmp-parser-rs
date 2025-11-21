@@ -33,12 +33,23 @@ pub struct Translation {
 }
 
 impl Translation {
+    #[must_use]
+    pub fn huge_page(pxes: &[Pxe; 2], gva: Gva) -> Self {
+        Self::inner_new(pxes, gva)
+    }
+
+    #[must_use]
+    pub fn large_page(pxes: &[Pxe; 3], gva: Gva) -> Self {
+        Self::inner_new(pxes, gva)
+    }
+
+    #[must_use]
+    pub fn new(pxes: &[Pxe; 4], gva: Gva) -> Self {
+        Self::inner_new(pxes, gva)
+    }
+
     /// Create a new instance from a slice of PXEs and the original GVA.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `pxes` is malformed (i.e. not between 2 and 4 entries).
-    pub fn new(pxes: &[Pxe], gva: Gva) -> Self {
+    fn inner_new(pxes: &[Pxe], gva: Gva) -> Self {
         let writable = pxes.iter().all(Pxe::writable);
         let executable = pxes.iter().all(Pxe::executable);
         let user_accessible = pxes.iter().all(Pxe::user_accessible);
@@ -136,7 +147,7 @@ impl<'parser> Reader<'parser> {
         // directory; see Table 4-1.
         let pd_base = pdpte.pfn.gpa();
         if pdpte.large_page() {
-            return Ok(Translation::new(&[pml4e, pdpte], gva));
+            return Ok(Translation::huge_page(&[pml4e, pdpte], gva));
         }
 
         let pde_gpa = Gpa::new(pd_base.u64() + (gva.pde_idx() * 8));
@@ -154,7 +165,7 @@ impl<'parser> Reader<'parser> {
         // table; see Table 4-18.
         let pt_base = pde.pfn.gpa();
         if pde.large_page() {
-            return Ok(Translation::new(&[pml4e, pdpte, pde], gva));
+            return Ok(Translation::large_page(&[pml4e, pdpte, pde], gva));
         }
 
         let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
