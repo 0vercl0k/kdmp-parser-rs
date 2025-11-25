@@ -5,7 +5,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::fs::File;
-use std::io::SeekFrom;
 use std::mem::MaybeUninit;
 use std::ops::Range;
 use std::path::Path;
@@ -42,28 +41,14 @@ fn gpa_from_pfn_range(pfn_range: &PfnRange, page_idx: u64) -> Option<Gpa> {
     Some(Pfn::new(pfn_range.page_file_number).gpa_with_offset(offset))
 }
 
-/// Peek for a `T` from the cursor.
-/// XXX: why do we need peek?
-fn peek_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
+/// Read a `T` from the cursor.
+fn read_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
     let mut s: MaybeUninit<T> = MaybeUninit::uninit();
     let size_of_s = size_of_val(&s);
     let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr().cast::<u8>(), size_of_s) };
-
-    let pos = reader.stream_position()?;
     reader.read_exact(slice_over_s)?;
-    reader.seek(SeekFrom::Start(pos))?;
 
     Ok(unsafe { s.assume_init() })
-}
-
-/// Read a `T` from the cursor.
-fn read_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
-    let s = peek_struct(reader)?;
-    let size_of_s = size_of_val(&s);
-
-    reader.seek(SeekFrom::Current(size_of_s.try_into().unwrap()))?;
-
-    Ok(s)
 }
 
 /// A kernel dump parser that gives access to the physical memory space stored

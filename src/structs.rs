@@ -6,14 +6,17 @@ use std::fmt::Debug;
 use crate::error::{Error, Result};
 use crate::gxa::Gpa;
 
-// XXX: figure the rules
-// The rules are:
-// 1/ no padding bytes (otherwise you could potentially leak memory)
-// 2/ no invalid bit patterns
+/// We use this `Pod` trait to implement / constraint the `*read_struct`
+/// functions. For the functions to work as expected and be safe, here is the
+/// rule that a type `T` needs to follow to be `Pod`:
+///   - `T` should not contain a field / type that have invalid bit patterns (no
+///     `char`, no `bool`, no pointers). We will read bytes from a file and
+///     basically `transmute` those bytes to `T` so all possible bit patterns
+///     should be 'fine'.
 pub unsafe trait Pod {}
 
-unsafe impl Pod for u32 {}
 unsafe impl Pod for u64 {}
+unsafe impl Pod for u32 {}
 unsafe impl Pod for u16 {}
 
 /// The different kind of physical pages.
@@ -695,18 +698,7 @@ pub struct KdDebuggerData64 {
 
 unsafe impl Pod for KdDebuggerData64 {}
 
-#[cfg(test)]
-mod tests {
-    use std::mem;
-
-    use crate::structs::{Context, Header64, PhysmemDesc, PhysmemRun};
-
-    /// Ensure that the sizes of key structures are right.
-    #[test]
-    fn layout() {
-        assert_eq!(mem::size_of::<PhysmemDesc>(), 0x10);
-        assert_eq!(mem::size_of::<PhysmemRun>(), 0x10);
-        assert_eq!(mem::size_of::<Header64>(), 0x2_000);
-        assert_eq!(mem::size_of::<Context>(), 0x4d0);
-    }
-}
+const _: () = assert!(size_of::<PhysmemDesc>() == 0x10);
+const _: () = assert!(size_of::<PhysmemRun>() == 0x10);
+const _: () = assert!(size_of::<Header64>() == 0x2_000);
+const _: () = assert!(size_of::<Context>() == 0x4d0);
