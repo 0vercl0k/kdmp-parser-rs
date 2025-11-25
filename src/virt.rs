@@ -13,7 +13,7 @@ use crate::structs::{PageKind, Pod};
 /// The details related to a virtual to physical address translation.
 ///
 /// If you are wondering why there is no 'readable' field, it is because
-/// [`KernelDumpParser::virt_translate`] returns an error if one of the PXE is
+/// [`Reader::translate`] returns an error if one of the PXE is
 /// marked as not present. In other words, if the translation succeeds, the page
 /// is at least readable.
 #[derive(Debug)]
