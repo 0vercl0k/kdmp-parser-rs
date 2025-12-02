@@ -1,4 +1,5 @@
-// Axel '0vercl0k' Souchet - Novvember 9 2025
+// Axel '0vercl0k' Souchet - November 9 2025
+//! Everything related to physical memory.
 use core::slice;
 use std::cmp::min;
 use std::io::SeekFrom;
@@ -9,6 +10,7 @@ use crate::gxa::{Gpa, Gxa};
 use crate::parse::KernelDumpParser;
 use crate::structs::PageKind;
 
+/// A reader lets you translate & read physical memory from a dump file.
 pub struct Reader<'parser> {
     parser: &'parser KernelDumpParser,
 }
@@ -18,14 +20,8 @@ impl<'parser> Reader<'parser> {
         Self { parser }
     }
 
-    /// Translate a [`Gpa`] into a file offset of where the content of the page
-    /// resides in.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the `gpa` has no backing page or if an integer
-    /// overflow is triggered while calculating where in the input file the
-    /// backing page is at.
+    /// Translate a [`Gpa`] into a file offset. At that file offset is where the
+    /// content of the page resides in.
     pub fn translate(&self, gpa: Gpa) -> Result<SeekFrom> {
         let Some(base_offset) = self.parser.physmem.get(&gpa.page_align()) else {
             return Err(PageReadError::NotInDump { gva: None, gpa }.into());
@@ -37,7 +33,8 @@ impl<'parser> Reader<'parser> {
             .ok_or(Error::Overflow("w/ gpa offset"))
     }
 
-    /// Read physical memory starting at `gpa` into a `buffer`.
+    /// Read the exact amount of bytes asked by the user & return a
+    /// `PartialRead` error if it couldn't read as much as wanted.
     pub fn read_exact(&self, gpa: Gpa, buf: &mut [u8]) -> Result<()> {
         // Amount of bytes left to read.
         let mut amount_left = buf.len();
@@ -58,8 +55,9 @@ impl<'parser> Reader<'parser> {
                     });
                 }
                 Err(Error::PageRead(_)) => {
-                    // We should never get there; `translate` can only fail with a `PageRead` error
-                    // if and only if the gpa doesn't exist in the dump.
+                    // We should never get there; `translate` can only fail with a
+                    // [`PageReadError::NotInDump`] if and only if the gpa
+                    // doesn't exist in the dump.
                     unreachable!();
                 }
                 Err(e) => return Err(e),
@@ -87,6 +85,10 @@ impl<'parser> Reader<'parser> {
         Ok(())
     }
 
+    /// Read the physical memory starting at `gpa` into `buf`. If it cannot read
+    /// as much as asked by the user because the dump file is missing a physical
+    /// memory page, the function doesn't error out and return the amount of
+    /// bytes that was successfully read.
     pub fn read(&self, gpa: Gpa, buf: &mut [u8]) -> Result<usize> {
         match self.read_exact(gpa, buf) {
             Ok(()) => Ok(buf.len()),

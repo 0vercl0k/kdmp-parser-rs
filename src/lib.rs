@@ -1,6 +1,7 @@
 // Axel '0vercl0k' Souchet - February 25 2024
 #![allow(clippy::doc_markdown)]
 #![doc = include_str!("../README.md")]
+#![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 pub mod bits;
 pub mod error;
 pub mod gxa;

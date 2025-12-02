@@ -1,6 +1,6 @@
 // Axel '0vercl0k' Souchet - July 18 2023
 //! This implements logic that allows to memory map a file on both
-//! Unix and Windows (cf [`memory_map_file`] / [`unmap_memory_mapped_file`]).
+//! Unix and Windows (cf `memory_map_file` / `unmap_memory_mapped_file`).
 use std::fmt::{self, Debug};
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek};

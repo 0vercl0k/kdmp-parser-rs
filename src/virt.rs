@@ -1,4 +1,5 @@
 // Axel '0vercl0k' Souchet - November 9 2025
+//! Everything related to virtual memory.
 use core::slice;
 use std::cmp::min;
 use std::mem::MaybeUninit;
@@ -48,7 +49,6 @@ impl Translation {
         Self::inner_new(pxes, gva)
     }
 
-    /// Create a new instance from a slice of PXEs and the original GVA.
     fn inner_new(pxes: &[Pxe], gva: Gva) -> Self {
         let writable = pxes.iter().all(Pxe::writable);
         let executable = pxes.iter().all(Pxe::executable);
@@ -78,7 +78,7 @@ impl Translation {
     }
 }
 
-pub fn ignore_non_fatal<T>(r: Result<T>) -> Result<Option<T>> {
+pub(crate) fn ignore_non_fatal<T>(r: Result<T>) -> Result<Option<T>> {
     match r {
         Ok(o) => Ok(Some(o)),
         Err(Error::PageRead(_) | Error::PartialRead { .. }) => Ok(None),
@@ -86,6 +86,7 @@ pub fn ignore_non_fatal<T>(r: Result<T>) -> Result<Option<T>> {
     }
 }
 
+/// A reader lets you translate & read virtual memory from a dump file.
 pub struct Reader<'parser> {
     parser: &'parser KernelDumpParser,
     dtb: Gpa,
@@ -100,8 +101,7 @@ impl<'parser> Reader<'parser> {
         Self { parser, dtb }
     }
 
-    /// Translate a [`Gva`] into a [`Gpa`] using a specific directory table base
-    /// / set of page tables.
+    /// Translate a [`Gva`] into a [`Gpa`].
     #[expect(clippy::similar_names)]
     pub fn translate(&self, gva: Gva) -> Result<Translation> {
         let read_pxe = |gpa: Gpa, pxe: PxeKind| -> Result<Pxe> {
@@ -185,18 +185,8 @@ impl<'parser> Reader<'parser> {
         Ok(Translation::new(&[pml4e, pdpte, pde, pte], gva))
     }
 
-    pub fn read(&self, gva: Gva, buf: &mut [u8]) -> Result<usize> {
-        match self.read_exact(gva, buf) {
-            Ok(()) => Ok(buf.len()),
-            Err(Error::PartialRead { actual_amount, .. }) => Ok(actual_amount),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Read virtual memory starting at `gva` into a `buffer` using a specific
-    /// directory table base / set of page tables, propagating all errors
-    /// including memory errors.
-    // why Option<usize>? if page not present or not in dump, None, otherwise usize
+    /// Read the exact amount of bytes asked by the user & return a
+    /// `PartialRead` error if it couldn't read as much as wanted.
     pub fn read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<()> {
         // Amount of bytes left to read.
         let mut amount_left = buf.len();
@@ -254,7 +244,7 @@ impl<'parser> Reader<'parser> {
                 }
                 Err(Error::PartialRead { .. }) => {
                     // We should never get there; `phys::Reader::read_exact` can only return a
-                    // `PartialRead` error if it cannot read the gpa because it
+                    // [`PageReadError::NotInDump`] error if it cannot read the gpa because it
                     // isn't in the dump.
                     unreachable!();
                 }
@@ -272,8 +262,20 @@ impl<'parser> Reader<'parser> {
         Ok(())
     }
 
-    /// Read a `T` from virtual memory. Returns `None` if a memory error occurs
-    /// (page not present, page not in dump, etc.).
+    /// Read the virtual memory starting at `gva` into `buf`. If it cannot read
+    /// as much as asked by the user because the dump file is missing a physical
+    /// memory page or because one of the PXE is non present, the function
+    /// doesn't error out and return the amount of bytes that was
+    /// successfully read.
+    pub fn read(&self, gva: Gva, buf: &mut [u8]) -> Result<usize> {
+        match self.read_exact(gva, buf) {
+            Ok(()) => Ok(buf.len()),
+            Err(Error::PartialRead { actual_amount, .. }) => Ok(actual_amount),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Read a `T` from virtual memory.
     pub fn read_struct<T: Pod>(&self, gva: Gva) -> Result<T> {
         let mut t: MaybeUninit<T> = MaybeUninit::uninit();
         let size_of_t = size_of_val(&t);
@@ -285,14 +287,23 @@ impl<'parser> Reader<'parser> {
         Ok(unsafe { t.assume_init() })
     }
 
+    /// Try to translate `gva` into [`Gpa`]. Returns `Some` if the translation
+    /// is successful, `None` if it fails because a page is not present or that
+    /// a physical page doesn't exist in the dump.
     pub fn try_translate(&self, gva: Gva) -> Result<Option<Translation>> {
         ignore_non_fatal(self.translate(gva))
     }
 
+    /// Try to read the exact amount of bytes asked by the user. Returns `Some`
+    /// if successful, `None` if it fails because a page is not present or that
+    /// a physical page doesn't exist in the dump..
     pub fn try_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
         ignore_non_fatal(self.read_exact(gva, buf))
     }
 
+    /// Try to read a `T` from virtual memory. Returns `Some` if the translation
+    /// is successful, `None` if it fails because a page is not present or that
+    /// a physical page doesn't exist in the dump.
     pub fn try_read_struct<T: Pod>(&self, gva: Gva) -> Result<Option<T>> {
         ignore_non_fatal(self.read_struct(gva))
     }

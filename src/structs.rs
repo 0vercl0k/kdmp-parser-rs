@@ -13,6 +13,15 @@ use crate::gxa::Gpa;
 ///     `char`, no `bool`, no pointers). We will read bytes from a file and
 ///     basically `transmute` those bytes to `T` so all possible bit patterns
 ///     should be 'fine'.
+///
+/// # Safety
+///
+/// Implementing this trait for a type `T` requires that `T` is safe to
+/// initialize from any arbitrary bit pattern. This means:
+/// - `T` must not contain types with invalid bit patterns (e.g., `bool`,
+///   `char`, references, pointers)
+/// - All possible byte patterns must represent valid values of `T`
+/// - This is required because bytes are read from a file and transmuted to `T`
 pub unsafe trait Pod {}
 
 unsafe impl Pod for u64 {}
