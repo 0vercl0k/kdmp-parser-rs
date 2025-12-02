@@ -206,12 +206,10 @@ impl<'parser> Reader<'parser> {
         let mut addr = gva;
         // Let's try to read as much as the user wants.
         while amount_left > 0 {
-            // Translate the gva into a gpa. But make sure to not early return if an error
-            // occured if we already have read some bytes.
+            // Translate the gva into a gpa.
             let translation = match self.translate(addr) {
                 Ok(t) => t,
-                // If we already read some bytes, and it's a non fatal error let's stop here..
-                Err(Error::PageRead(reason)) if total_read > 0 => {
+                Err(Error::PageRead(reason)) => {
                     return Err(Error::PartialRead {
                         expected_amount: buf.len(),
                         actual_amount: total_read,
@@ -234,34 +232,38 @@ impl<'parser> Reader<'parser> {
 
             // Read the physical memory!
             let gpa = translation.gpa();
-            let amount_read = match phys::Reader::new(self.parser).read(gpa, slice) {
-                Ok(n) => n,
-                Err(Error::PageRead(e)) => {
-                    // If we got a `MemoryRead`, then `phys::Reader::read` can only fail if there's
-                    // no backing page found; let's ensure that.
-                    debug_assert!(matches!(e, PageReadError::NotInDump { gva: None, .. }));
-                    // Augment `NotInDump` with the `gva` as `phys_read` doesn't know anything about
-                    // it.
+            match phys::Reader::new(self.parser).read_exact(gpa, slice) {
+                Ok(()) => {}
+                Err(Error::PartialRead {
+                    actual_amount,
+                    reason: PageReadError::NotInDump { gva: None, gpa },
+                    ..
+                }) => {
+                    // Augment `NotInDump` with the `gva` as `phys::Reader::read_exact` doesn't know
+                    // anything about it.
                     let reason = PageReadError::NotInDump {
                         gva: Some((addr, None)),
                         gpa,
                     };
 
-                    return Err(if total_read > 0 {
-                        Error::PartialRead {
-                            expected_amount: total_read,
-                            actual_amount: buf.len(),
-                            reason,
-                        }
-                    } else {
-                        reason.into()
+                    return Err(Error::PartialRead {
+                        expected_amount: buf.len(),
+                        actual_amount: total_read + actual_amount,
+                        reason,
                     });
                 }
+                Err(Error::PartialRead { .. }) => {
+                    // We should never get there; `phys::Reader::read_exact` can only return a
+                    // `PartialRead` error if it cannot read the gpa because it
+                    // isn't in the dump.
+                    unreachable!();
+                }
                 Err(e) => return Err(e),
-            };
+            }
+
             // Update the total amount of read bytes and how much work we have left.
-            total_read += amount_read;
-            amount_left -= amount_read;
+            total_read += amount_wanted;
+            amount_left -= amount_wanted;
             // We have more work to do, so let's move to the next page.
             addr = addr.next_aligned_page();
         }

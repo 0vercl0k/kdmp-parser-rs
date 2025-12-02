@@ -512,10 +512,16 @@ fn valid_pte_no_backing() {
     let virt_reader = virt::Reader::new(&parser);
     let mut buffer = [0];
     assert!(matches!(
-        virt_reader.read(0x1a42ea30240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
-        Err(Error::PageRead(
-            PageReadError::NotInDump { gva: Some((gva, None)), gpa }
-        )) if gpa == 0x166b7240.into() && gva == 0x1a42ea30240.into()
+        virt_reader
+            .read(0x1a42ea30240.into(), &mut buffer)
+            .inspect_err(|e| eprintln!("{e:?}")),
+        Ok(0)
+    ));
+
+    assert!(matches!(
+        virt_reader.read_exact(0x1a42ea30240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+            Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: Some((gva, None)), gpa }, ..}
+        ) if gpa == 0x166b7240.into() && gva == 0x1a42ea30240.into()
     ));
 
     assert!(matches!(
@@ -527,17 +533,22 @@ fn valid_pte_no_backing() {
 
     let phys_reader = phys::Reader::new(&parser);
     assert!(matches!(
-        phys_reader.read(Gpa::new(0x166b7240), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
-        Err(Error::PageRead(
-            PageReadError::NotInDump { gva: None, gpa }
-        )) if gpa == 0x166b7240.into()
+        phys_reader
+            .read(Gpa::new(0x166b7240), &mut buffer)
+            .inspect_err(|e| eprintln!("{e:?}")),
+        Ok(0)
     ));
 
     assert!(matches!(
-        virt_reader.read(0x16e23fa060.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
-        Err(Error::PageRead(
-            PageReadError::NotInDump { gva: Some((gva, None)), gpa }
-        )) if gpa == 0x1bc4060.into() && gva == 0x16e23fa060.into()
+        phys_reader.read_exact(Gpa::new(0x166b7240), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+        Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: None, gpa }, ..
+        }) if gpa == 0x166b7240.into()
+    ));
+
+    assert!(matches!(
+        virt_reader.read_exact(0x16e23fa060.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+        Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: Some((gva, None)), gpa }, ..}
+        ) if gpa == 0x1bc4060.into() && gva == 0x16e23fa060.into()
     ));
 
     assert!(matches!(
@@ -815,11 +826,11 @@ fn partial_phys() {
     // ```
     assert!(matches!(
         phys_reader.read(0x15ff0.into(), &mut buffer),
-        Err(Error::PageRead(PageReadError::NotInDump { gva: None, gpa })) if gpa == 0x15ff0.into()
+        Ok(0)
     ));
 
     assert!(matches!(
         phys_reader.read_exact(0x15ff0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
-        Err(Error::PageRead(PageReadError::NotInDump { gva: None, gpa })) if gpa == 0x15ff0.into()
+        Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: None, gpa }, .. }) if gpa == 0x15ff0.into()
     ));
 }

@@ -50,20 +50,21 @@ impl<'parser> Reader<'parser> {
             // Translate the gpa into a file offset..
             let offset = match self.translate(addr) {
                 Ok(o) => o,
-                Err(Error::PageRead(_)) if total_read > 0 => {
+                Err(Error::PageRead(PageReadError::NotInDump { gva: None, gpa })) => {
                     return Err(Error::PartialRead {
                         expected_amount: buf.len(),
                         actual_amount: total_read,
-                        reason: PageReadError::NotInDump {
-                            gva: None,
-                            gpa: addr,
-                        },
+                        reason: PageReadError::NotInDump { gva: None, gpa },
                     });
+                }
+                Err(Error::PageRead(_)) => {
+                    // We should never get there; `translate` can only fail with a `PageRead` error
+                    // if and only if the gpa doesn't exist in the dump.
+                    unreachable!();
                 }
                 Err(e) => return Err(e),
             };
             // ..and seek the reader there.
-            // XXX: should it be a partial read?
             self.parser.seek(offset)?;
             // We need to take care of reads that straddle different physical memory pages.
             // So let's figure out the maximum amount of bytes we can read off this page.
@@ -74,7 +75,6 @@ impl<'parser> Reader<'parser> {
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
             // Read the physical memory!
-            // XXX: test reading phys memory partial
             self.parser.read_exact(slice)?;
             // Update the total amount of read bytes and how much work we have left.
             total_read += amount_wanted;
