@@ -21,6 +21,7 @@ enum ReaderMode {
     File,
 }
 
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct Args {
@@ -77,29 +78,26 @@ fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
         let mut row_it = row.iter_mut().enumerate().peekable();
         while let Some((idx, item)) = row_it.next() {
             // Drain the data iterator byte by byte and fill the row with the data.
-            match data_it.next() {
-                Some(c) => {
-                    // If we have a byte, then easy peasy.
-                    *item = Some(*c);
-                    print!("{:02x}", c);
+            if let Some(c) = data_it.next() {
+                // If we have a byte, then easy peasy.
+                *item = Some(*c);
+                print!("{c:02x}");
+            } else {
+                *item = None;
+                // If we don't have a byte, then we need to figure out what to do. There are two
+                // cases to take care of:
+                let displayed_amount = i + idx;
+                if displayed_amount >= wanted_len {
+                    // - either what is left to display is not a full row, in which case we need to
+                    //   display spaces to padd the output such that the upcoming ASCII
+                    //   representation stays aligned.
+                    print!("  ");
+                } else {
+                    // - either the user asked a larger length than what is mapped in memory, in
+                    //   which case we need to display `??` for those bytes.
+                    print!("??");
                 }
-                None => {
-                    *item = None;
-                    // If we don't have a byte, then we need to figure out what to do. There are two
-                    // cases to take care of:
-                    let displayed_amount = i + idx;
-                    if displayed_amount >= wanted_len {
-                        // - either what is left to display is not a full row, in which case we need
-                        //   to display spaces to padd the output such that the upcoming ASCII
-                        //   representation stays aligned.
-                        print!("  ");
-                    } else {
-                        // - either the user asked a larger length than what is mapped in memory, in
-                        //   which case we need to display `??` for those bytes.
-                        print!("??");
-                    }
-                }
-            };
+            }
 
             // We separate half of the row with a dash. But we only want to display it if
             // there'll be at least one byte after it (so at least 9 bytes to display in
@@ -121,7 +119,7 @@ fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
                 print!("?");
             }
         }
-        println!()
+        println!();
     }
 }
 

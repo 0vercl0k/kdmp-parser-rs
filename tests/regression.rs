@@ -14,7 +14,8 @@ use kdmp_parser::{phys, virt};
 use serde::Deserialize;
 
 /// Convert an hexadecimal encoded integer string into a `u64`.
-pub fn hex_str(s: &str) -> u64 {
+#[must_use]
+fn hex_str(s: &str) -> u64 {
     u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap()
 }
 
@@ -80,7 +81,7 @@ fn compare_modules(parser: &KernelDumpParser, modules: &[Module]) -> bool {
         let found_mod = modules.iter().find(|m| m.at == *r).unwrap();
         seen.insert(r.start);
 
-        let filename = name.rsplit_once('\\').map(|(_, s)| s).unwrap_or(name);
+        let filename = name.rsplit_once('\\').map_or(name, |(_, s)| s);
         if filename.to_lowercase() != found_mod.name.to_lowercase() {
             if found_mod.name == "nt" && filename == "ntoskrnl.exe" {
                 continue;
@@ -122,13 +123,14 @@ static LIVE_KERNEL_PATH: LazyLock<PathBuf> =
 static WOW64_DUMP_PATH: LazyLock<PathBuf> =
     LazyLock::new(|| BASE_PATH.join("wow64_kernelactive.dmp"));
 
+#[expect(clippy::too_many_lines)]
 #[test]
 fn regressions() {
     let modules_1: Vec<M> =
         serde_json::from_reader(File::open(TEST_DIR.join("modules_1.json")).unwrap()).unwrap();
     let modules_1 = modules_1
         .into_iter()
-        .map(|m| m.into())
+        .map(Into::into)
         .collect::<Vec<Module>>();
     // kd> r
     // rax=0000000000000003 rbx=fffff8050f4e9f70 rcx=0000000000000001
@@ -148,28 +150,28 @@ fn regressions() {
             0x6d, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x63, 0x88, 0x75, 0x00, 0x00, 0x00, 0x00, 0x0a,
             0x63, 0x98,
         ],
-        virt_addr: 0xfffff805_108776a0,
+        virt_addr: 0xffff_f805_1087_76a0,
         virt_bytes: [
             0xcc, 0xc3, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00,
             0x00, 0x00,
         ],
-        rax: 0x00000000_00000003,
-        rbx: 0xfffff805_0f4e9f70,
-        rcx: 0x00000000_00000001,
-        rdx: 0xfffff805_135684d0,
-        rsi: 0x00000000_00000100,
-        rdi: 0xfffff805_0f4e9f80,
-        rip: 0xfffff805_108776a0,
-        rsp: 0xfffff805_135684f8,
-        rbp: 0xfffff805_13568600,
-        r8: 0x00000000_00000003,
-        r9: 0xfffff805_135684b8,
-        r10: 0x00000000_00000000,
-        r11: 0xffffa884_8825e000,
-        r12: 0xfffff805_0f4e9f80,
-        r13: 0xfffff805_10c3c958,
-        r14: 0x00000000_00000000,
-        r15: 0x00000000_00000052,
+        rax: 0x0000_0000_0000_0003,
+        rbx: 0xffff_f805_0f4e_9f70,
+        rcx: 0x0000_0000_0000_0001,
+        rdx: 0xffff_f805_1356_84d0,
+        rsi: 0x0000_0000_0000_0100,
+        rdi: 0xffff_f805_0f4e_9f80,
+        rip: 0xffff_f805_1087_76a0,
+        rsp: 0xffff_f805_1356_84f8,
+        rbp: 0xffff_f805_1356_8600,
+        r8: 0x0000_0000_0000_0003,
+        r9: 0xffff_f805_1356_84b8,
+        r10: 0x0000_0000_0000_0000,
+        r11: 0xffff_a884_8825_e000,
+        r12: 0xffff_f805_0f4e_9f80,
+        r13: 0xffff_f805_10c3_c958,
+        r14: 0x0000_0000_0000_0000,
+        r15: 0x0000_0000_0000_0052,
         modules: modules_1.as_slice(),
     };
 
@@ -182,28 +184,28 @@ fn regressions() {
             0x6d, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x63, 0x88, 0x75, 0x00, 0x00, 0x00, 0x00, 0x0a,
             0x63, 0x98,
         ],
-        virt_addr: 0xfffff805_108776a0,
+        virt_addr: 0xffff_f805_1087_76a0,
         virt_bytes: [
             0xcc, 0xc3, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00,
             0x00, 0x00,
         ],
-        rax: 0x00000000_00000003,
-        rbx: 0xfffff805_0f4e9f70,
-        rcx: 0x00000000_00000001,
-        rdx: 0xfffff805_135684d0,
-        rsi: 0x00000000_00000100,
-        rdi: 0xfffff805_0f4e9f80,
-        rip: 0xfffff805_108776a0,
-        rsp: 0xfffff805_135684f8,
-        rbp: 0xfffff805_13568600,
-        r8: 0x00000000_00000003,
-        r9: 0xfffff805_135684b8,
-        r10: 0x00000000_00000000,
-        r11: 0xffffa884_8825e000,
-        r12: 0xfffff805_0f4e9f80,
-        r13: 0xfffff805_10c3c958,
-        r14: 0x00000000_00000000,
-        r15: 0x00000000_00000052,
+        rax: 0x0000_0000_0000_0003,
+        rbx: 0xffff_f805_0f4e_9f70,
+        rcx: 0x0000_0000_0000_0001,
+        rdx: 0xffff_f805_1356_84d0,
+        rsi: 0x0000_0000_0000_0100,
+        rdi: 0xffff_f805_0f4e_9f80,
+        rip: 0xffff_f805_1087_76a0,
+        rsp: 0xffff_f805_1356_84f8,
+        rbp: 0xffff_f805_1356_8600,
+        r8: 0x0000_0000_0000_0003,
+        r9: 0xffff_f805_1356_84b8,
+        r10: 0x0000_0000_0000_0000,
+        r11: 0xffff_a884_8825_e000,
+        r12: 0xffff_f805_0f4e_9f80,
+        r13: 0xffff_f805_10c3_c958,
+        r14: 0x0000_0000_0000_0000,
+        r15: 0x0000_0000_0000_0052,
         modules: &modules_1,
     };
 
@@ -211,40 +213,40 @@ fn regressions() {
         serde_json::from_reader(File::open(TEST_DIR.join("modules_2.json")).unwrap()).unwrap();
     let modules_2 = modules_2
         .into_iter()
-        .map(|m| m.into())
+        .map(Into::into)
         .collect::<Vec<Module>>();
 
     let kernel_dump = TestcaseValues {
         file: KERNEL_DUMP_PATH.to_path_buf(),
         dump_type: DumpType::KernelMemory,
         size: 0xa0_2e,
-        phys_addr: 0x02_58_92_f0,
+        phys_addr: 0x0258_92f0,
         phys_bytes: [
             0x10, 0x8c, 0x24, 0x50, 0x0c, 0xc0, 0xff, 0xff, 0xa0, 0x19, 0x38, 0x51, 0x0c, 0xc0,
             0xff, 0xff,
         ],
-        virt_addr: 0xfffff803_f2c35470,
+        virt_addr: 0xffff_f803_f2c3_5470,
         virt_bytes: [
             0xcc, 0xc3, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00,
             0x00, 0x00,
         ],
-        rax: 0x00000000_00007a01,
-        rbx: 0xffffc00c_5191e010,
-        rcx: 0x00000000_00000001,
-        rdx: 0x00000012_00000000,
-        rsi: 0xffffc00c_51907bb0,
-        rdi: 0x00000000_00000002,
-        rip: 0xfffff803_f2c35470,
-        rsp: 0xfffff803_f515ec28,
-        rbp: 0x00000000_0c1c9800,
-        r8: 0x00000000_000000b0,
-        r9: 0xffffc00c_502ff000,
-        r10: 0x00000000_00000057,
-        r11: 0xfffff803_f3a04500,
-        r12: 0xfffff803_f515ee60,
-        r13: 0x00000000_00000003,
-        r14: 0xfffff803_f1e9a180,
-        r15: 0x00000000_0000001f,
+        rax: 0x0000_0000_0000_7a01,
+        rbx: 0xffff_c00c_5191_e010,
+        rcx: 0x0000_0000_0000_0001,
+        rdx: 0x0000_0012_0000_0000,
+        rsi: 0xffff_c00c_5190_7bb0,
+        rdi: 0x0000_0000_0000_0002,
+        rip: 0xffff_f803_f2c3_5470,
+        rsp: 0xffff_f803_f515_ec28,
+        rbp: 0x0000_0000_0c1c_9800,
+        r8: 0x0000_0000_0000_00b0,
+        r9: 0xffff_c00c_502f_f000,
+        r10: 0x0000_0000_0000_0057,
+        r11: 0xffff_f803_f3a0_4500,
+        r12: 0xffff_f803_f515_ee60,
+        r13: 0x0000_0000_0000_0003,
+        r14: 0xffff_f803_f1e9_a180,
+        r15: 0x0000_0000_0000_001f,
         modules: &modules_2,
     };
 
@@ -252,40 +254,40 @@ fn regressions() {
         serde_json::from_reader(File::open(TEST_DIR.join("modules_3.json")).unwrap()).unwrap();
     let modules_3 = modules_3
         .into_iter()
-        .map(|m| m.into())
+        .map(Into::into)
         .collect::<Vec<Module>>();
 
     let kernel_user_dump = TestcaseValues {
         file: KERNEL_USER_DUMP_PATH.to_path_buf(),
         dump_type: DumpType::KernelAndUserMemory,
         size: 0x01_f7_c7,
-        phys_addr: 0x02_58_92_f0,
+        phys_addr: 0x0258_92f0,
         phys_bytes: [
             0x10, 0x8c, 0x24, 0x50, 0x0c, 0xc0, 0xff, 0xff, 0xa0, 0x19, 0x38, 0x51, 0x0c, 0xc0,
             0xff, 0xff,
         ],
-        virt_addr: 0xfffff803_f2c35470,
+        virt_addr: 0xffff_f803_f2c3_5470,
         virt_bytes: [
             0xcc, 0xc3, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00,
             0x00, 0x00,
         ],
-        rax: 0x00000000_00007a01,
-        rbx: 0xffffc00c_5191e010,
-        rcx: 0x00000000_00000001,
-        rdx: 0x00000012_00000000,
-        rsi: 0xffffc00c_51907bb0,
-        rdi: 0x00000000_00000002,
-        rip: 0xfffff803_f2c35470,
-        rsp: 0xfffff803_f515ec28,
-        rbp: 0x00000000_0c1c9800,
-        r8: 0x00000000_000000b0,
-        r9: 0xffffc00c_502ff000,
-        r10: 0x00000000_00000057,
-        r11: 0xfffff803_f3a04500,
-        r12: 0xfffff803_f515ee60,
-        r13: 0x00000000_00000003,
-        r14: 0xfffff803_f1e9a180,
-        r15: 0x00000000_0000001f,
+        rax: 0x0000_0000_0000_7a01,
+        rbx: 0xffff_c00c_5191_e010,
+        rcx: 0x0000_0000_0000_0001,
+        rdx: 0x0000_0012_0000_0000,
+        rsi: 0xffff_c00c_5190_7bb0,
+        rdi: 0x0000_0000_0000_0002,
+        rip: 0xffff_f803_f2c3_5470,
+        rsp: 0xffff_f803_f515_ec28,
+        rbp: 0x0000_0000_0c1c_9800,
+        r8: 0x0000_0000_0000_00b0,
+        r9: 0xffff_c00c_502f_f000,
+        r10: 0x0000_0000_0000_0057,
+        r11: 0xffff_f803_f3a0_4500,
+        r12: 0xffff_f803_f515_ee60,
+        r13: 0x0000_0000_0000_0003,
+        r14: 0xffff_f803_f1e9_a180,
+        r15: 0x0000_0000_0000_001f,
         modules: &modules_3,
     };
 
@@ -293,33 +295,33 @@ fn regressions() {
         file: COMPLETE_DUMP_PATH.to_path_buf(),
         dump_type: DumpType::CompleteMemory,
         size: 0x01_fb_f9,
-        phys_addr: 0x02_58_92_f0,
+        phys_addr: 0x0258_92f0,
         phys_bytes: [
             0x10, 0x8c, 0x24, 0x50, 0x0c, 0xc0, 0xff, 0xff, 0xa0, 0x19, 0x38, 0x51, 0x0c, 0xc0,
             0xff, 0xff,
         ],
-        virt_addr: 0xfffff803_f2c35470,
+        virt_addr: 0xffff_f803_f2c3_5470,
         virt_bytes: [
             0xcc, 0xc3, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00,
             0x00, 0x00,
         ],
-        rax: 0x00000000_00007a01,
-        rbx: 0xffffc00c_5191e010,
-        rcx: 0x00000000_00000001,
-        rdx: 0x00000012_00000000,
-        rsi: 0xffffc00c_51907bb0,
-        rdi: 0x00000000_00000002,
-        rip: 0xfffff803_f2c35470,
-        rsp: 0xfffff803_f515ec28,
-        rbp: 0x00000000_0c1c9800,
-        r8: 0x00000000_000000b0,
-        r9: 0xffffc00c_502ff000,
-        r10: 0x00000000_00000057,
-        r11: 0xfffff803_f3a04500,
-        r12: 0xfffff803_f515ee60,
-        r13: 0x00000000_00000003,
-        r14: 0xfffff803_f1e9a180,
-        r15: 0x00000000_0000001f,
+        rax: 0x0000_0000_0000_7a01,
+        rbx: 0xffff_c00c_5191_e010,
+        rcx: 0x0000_0000_0000_0001,
+        rdx: 0x0000_0012_0000_0000,
+        rsi: 0xffff_c00c_5190_7bb0,
+        rdi: 0x0000_0000_0000_0002,
+        rip: 0xffff_f803_f2c3_5470,
+        rsp: 0xffff_f803_f515_ec28,
+        rbp: 0x0000_0000_0c1c_9800,
+        r8: 0x0000_0000_0000_00b0,
+        r9: 0xffff_c00c_502f_f000,
+        r10: 0x0000_0000_0000_0057,
+        r11: 0xffff_f803_f3a0_4500,
+        r12: 0xffff_f803_f515_ee60,
+        r13: 0x0000_0000_0000_0003,
+        r14: 0xffff_f803_f1e9_a180,
+        r15: 0x0000_0000_0000_001f,
         modules: &modules_3,
     };
 
@@ -327,40 +329,40 @@ fn regressions() {
         serde_json::from_reader(File::open(TEST_DIR.join("modules_4.json")).unwrap()).unwrap();
     let modules_4 = modules_4
         .into_iter()
-        .map(|m| m.into())
+        .map(Into::into)
         .collect::<Vec<Module>>();
 
     let live_kernel = TestcaseValues {
         file: LIVE_KERNEL_PATH.to_path_buf(),
         dump_type: DumpType::LiveKernelMemory,
         size: 0x01_54_f5,
-        phys_addr: 0xd9_6a_90_00,
+        phys_addr: 0xd96a_9000,
         phys_bytes: [
             0x67, 0xd8, 0xb6, 0xdd, 0x00, 0x00, 0x00, 0x0a, 0x67, 0xa8, 0x1d, 0xd6, 0x00, 0x00,
             0x00, 0x0a,
         ],
-        virt_addr: 0xfffff807_50a98b6d,
+        virt_addr: 0xffff_f807_50a9_8b6d,
         virt_bytes: [
             0x48, 0x8d, 0x8f, 0x00, 0x01, 0x00, 0x00, 0xe8, 0x17, 0x2a, 0x98, 0xff, 0x48, 0x81,
             0xc3, 0x48,
         ],
-        rax: 0x00000000_00000004,
-        rbx: 0xffffd20f_d8553000,
-        rcx: 0xffffa100_0ed84a00,
-        rdx: 0x00000000_00000000,
-        rsi: 0xffffd20f_d3beeae0,
-        rdi: 0xfffff807_4fb4b180,
-        rip: 0xfffff807_50a98b6d,
-        rsp: 0xfffffd8d_6bcaed10,
-        rbp: 0x00000000_00000000,
-        r8: 0x00000000_00000b80,
-        r9: 0xffffd20f_d8553348,
-        r10: 0x00000000_00000000,
-        r11: 0xffffd20f_d8553000,
-        r12: 0x00000000_00000002,
-        r13: 0x00000000_00000000,
-        r14: 0xffffd20f_d48d5080,
-        r15: 0x00000000_00000001,
+        rax: 0x0000_0000_0000_0004,
+        rbx: 0xffff_d20f_d855_3000,
+        rcx: 0xffff_a100_0ed8_4a00,
+        rdx: 0x0000_0000_0000_0000,
+        rsi: 0xffff_d20f_d3be_eae0,
+        rdi: 0xffff_f807_4fb4_b180,
+        rip: 0xffff_f807_50a9_8b6d,
+        rsp: 0xffff_fd8d_6bca_ed10,
+        rbp: 0x0000_0000_0000_0000,
+        r8: 0x0000_0000_0000_0b80,
+        r9: 0xffff_d20f_d855_3348,
+        r10: 0x0000_0000_0000_0000,
+        r11: 0xffff_d20f_d855_3000,
+        r12: 0x0000_0000_0000_0002,
+        r13: 0x0000_0000_0000_0000,
+        r14: 0xffff_d20f_d48d_5080,
+        r15: 0x0000_0000_0000_0001,
         modules: &modules_4,
     };
 
@@ -368,40 +370,40 @@ fn regressions() {
         serde_json::from_reader(File::open(TEST_DIR.join("modules_5.json")).unwrap()).unwrap();
     let modules_5 = modules_5
         .into_iter()
-        .map(|m| m.into())
+        .map(Into::into)
         .collect::<Vec<Module>>();
 
     let wow64 = TestcaseValues {
         file: WOW64_DUMP_PATH.to_path_buf(),
         dump_type: DumpType::KernelAndUserMemory,
         size: 0x03_ec_ff,
-        phys_addr: 0x06_23_50_00,
+        phys_addr: 0x0623_5000,
         phys_bytes: [
             0xcc, 0x33, 0xc0, 0xc3, 0x3b, 0x0d, 0x00, 0x50, 0x46, 0x00, 0x75, 0x01, 0xc3, 0xe9,
             0x79, 0x02,
         ],
-        virt_addr: 0x00451000,
+        virt_addr: 0x0045_1000,
         virt_bytes: [
             0xcc, 0x33, 0xc0, 0xc3, 0x3b, 0x0d, 0x00, 0x50, 0x46, 0x00, 0x75, 0x01, 0xc3, 0xe9,
             0x79, 0x02,
         ],
-        rax: 0x00465e58,
-        rbx: 0x0062d000,
-        rcx: 0x00000000,
-        rdx: 0x420e1d36,
-        rsi: 0x009ef4c0,
-        rdi: 0x009f0d30,
-        rip: 0x00451000,
-        rsp: 0x0056fbcc,
-        rbp: 0x0056fc10,
-        r8: 0x0000002b,
-        r9: 0x77cb2c0c,
-        r10: 0x00000000,
-        r11: 0x0038e450,
-        r12: 0x0062e000,
-        r13: 0x0038fda0,
-        r14: 0x0038ed40,
-        r15: 0x77c34660,
+        rax: 0x0046_5e58,
+        rbx: 0x0062_d000,
+        rcx: 0x0000_0000,
+        rdx: 0x420e_1d36,
+        rsi: 0x009e_f4c0,
+        rdi: 0x009f_0d30,
+        rip: 0x0045_1000,
+        rsp: 0x0056_fbcc,
+        rbp: 0x0056_fc10,
+        r8: 0x0000_002b,
+        r9: 0x77cb_2c0c,
+        r10: 0x0000_0000,
+        r11: 0x0038_e450,
+        r12: 0x0062_e000,
+        r13: 0x0038_fda0,
+        r14: 0x0038_ed40,
+        r15: 0x77c3_4660,
         modules: &modules_5,
     };
 
@@ -421,7 +423,7 @@ fn regressions() {
         let phys_reader = phys::Reader::new(&parser);
         eprintln!("{parser:?}");
         assert_eq!(parser.dump_type(), test.dump_type);
-        assert_eq!(parser.physmem().len(), test.size as usize);
+        assert_eq!(parser.physmem().len(), usize::try_from(test.size).unwrap());
         let mut buf = [0; 16];
         phys_reader
             .read_exact(Gpa::new(test.phys_addr), &mut buf)
@@ -476,7 +478,7 @@ fn transition_pte() {
     ];
     assert!(
         reader
-            .read(0x1a42ea30240.into(), &mut buffer)
+            .read(0x01a4_2ea3_0240.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}"))
             .is_ok()
     );
@@ -513,20 +515,20 @@ fn valid_pte_no_backing() {
     let mut buffer = [0];
     assert!(matches!(
         virt_reader
-            .read(0x1a42ea30240.into(), &mut buffer)
+            .read(0x01a4_2ea3_0240.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(0)
     ));
 
     assert!(matches!(
-        virt_reader.read_exact(0x1a42ea30240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+        virt_reader.read_exact(0x01a4_2ea3_0240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
             Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: Some((gva, None)), gpa }, ..}
-        ) if gpa == 0x166b7240.into() && gva == 0x1a42ea30240.into()
+        ) if gpa == 0x166b_7240.into() && gva == 0x01a4_2ea3_0240.into()
     ));
 
     assert!(matches!(
         virt_reader
-            .try_read_exact(0x1a42ea30240.into(), &mut buffer)
+            .try_read_exact(0x01a4_2ea3_0240.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(None)
     ));
@@ -534,26 +536,26 @@ fn valid_pte_no_backing() {
     let phys_reader = phys::Reader::new(&parser);
     assert!(matches!(
         phys_reader
-            .read(Gpa::new(0x166b7240), &mut buffer)
+            .read(Gpa::new(0x166b_7240), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(0)
     ));
 
     assert!(matches!(
-        phys_reader.read_exact(Gpa::new(0x166b7240), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+        phys_reader.read_exact(Gpa::new(0x166b_7240), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: None, gpa }, ..
-        }) if gpa == 0x166b7240.into()
+        }) if gpa == 0x166b_7240.into()
     ));
 
     assert!(matches!(
-        virt_reader.read_exact(0x16e23fa060.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
+        virt_reader.read_exact(0x0016_e23f_a060.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: Some((gva, None)), gpa }, ..}
-        ) if gpa == 0x1bc4060.into() && gva == 0x16e23fa060.into()
+        ) if gpa == 0x01bc_4060.into() && gva == 0x0016_e23f_a060.into()
     ));
 
     assert!(matches!(
         virt_reader
-            .try_read_exact(0x16e23fa060.into(), &mut buffer)
+            .try_read_exact(0x0016_e23f_a060.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(None)
     ));
@@ -597,19 +599,19 @@ fn bug_10() {
     let mut buffer = [0; 32];
     assert!(matches!(
         virt_reader
-            .read_exact(0xfffff803f3086fef.into(), &mut buffer)
+            .read_exact(0xffff_f803_f308_6fef.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Err(
             Error::PartialRead {
             expected_amount: 32,
             actual_amount: 17,
             reason: PageReadError::NotPresent { gva, which_pxe }
-        }) if gva == 0xfffff803f3087000.into() && which_pxe == PxeKind::Pte,
+        }) if gva == 0xffff_f803_f308_7000.into() && which_pxe == PxeKind::Pte,
     ));
 
     assert!(matches!(
         virt_reader
-            .read(0xfffff803f3086fef.into(), &mut buffer)
+            .read(0xffff_f803_f308_6fef.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(17)
     ));
@@ -628,10 +630,10 @@ fn bug_10() {
     // 0000015c`c6603938  69 00 6d 00 65 00 42 00-72 00 6f 00 6b 00 65 00  i.m.e.B.r.o.k.e.
     // ```
     let parser = KernelDumpParser::new(COMPLETE_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = virt::Reader::with_dtb(&parser, 0xea00002.into());
+    let virt_reader = virt::Reader::with_dtb(&parser, 0x0ea0_0002.into());
     let mut buffer = [0; 64];
     virt_reader
-        .read_exact(0x15cc6603908.into(), &mut buffer)
+        .read_exact(0x015c_c660_3908.into(), &mut buffer)
         .unwrap();
 
     assert_eq!(buffer, [
@@ -656,16 +658,19 @@ fn large_page() {
     // ```
     let parser = KernelDumpParser::new(WOW64_DUMP_PATH.as_path()).unwrap();
     let virt_reader = virt::Reader::new(&parser);
-    let tr = virt_reader.translate(0xfffff80122800000.into()).unwrap();
+    let tr = virt_reader.translate(0xffff_f801_2280_0000.into()).unwrap();
     assert!(matches!(tr.page_kind, PageKind::Large));
-    assert!(matches!(tr.pfn.u64(), 0x4800));
+    assert!(matches!(tr.pfn.u64(), 0x48_00));
     let mut buffer = [0; 0x10];
     // ```text
     // 32.1: kd> db 0xfffff80122800000 + 0x100000 - 8
     // 002b:fffff801`228ffff8  70 72 05 00 04 3a 65 00-54 3a 65 00 bc 82 0c 00  pr...:e.T:e.....
     // ```
     virt_reader
-        .read_exact(Gva::new(0xfffff80122800000 + 0x100000 - 8), &mut buffer)
+        .read_exact(
+            Gva::new(0xffff_f801_2280_0000 + 0x10_00_00 - 8),
+            &mut buffer,
+        )
         .unwrap();
 
     assert_eq!(buffer, [
@@ -692,7 +697,10 @@ fn large_page() {
     // ```
     let mut buffer = [0; 0x10];
     virt_reader
-        .read_exact(Gva::new(0xfffff80122800000 + 0x200000 - 0x8), &mut buffer)
+        .read_exact(
+            Gva::new(0xffff_f801_2280_0000 + 0x20_00_00 - 0x8),
+            &mut buffer,
+        )
         .unwrap();
 
     assert_eq!(buffer, [
@@ -709,7 +717,7 @@ fn large_page() {
     // contains 0A0000005DC78867  contains 0A0000005DC79867  contains 0A0000005DC7A867  contains 81000000625D5867
     // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  pfn 5dc7a     ---DA--UWEV  pfn 625d5     ---DA--UW-V
     // ```
-    let tr = virt_reader.translate(0x56fbcc.into()).unwrap();
+    let tr = virt_reader.translate(0x56_fb_cc.into()).unwrap();
     assert!(tr.writable);
     assert!(!tr.executable);
     assert!(tr.user_accessible);
@@ -723,7 +731,7 @@ fn large_page() {
     // contains 0A0000005DC78867  contains 0A0000005DC79867  contains 0A0000005DC7A867  contains 0100000006235025
     // pfn 5dc78     ---DA--UWEV  pfn 5dc79     ---DA--UWEV  pfn 5dc7a     ---DA--UWEV  pfn 6235      ----A--UREV
     // ```
-    let tr = virt_reader.translate(0x451000.into()).unwrap();
+    let tr = virt_reader.translate(0x45_10_00.into()).unwrap();
     assert!(!tr.writable);
     assert!(tr.executable);
     assert!(tr.user_accessible);
@@ -737,7 +745,7 @@ fn large_page() {
     // contains 0000000002709063  contains 000000000270A063  contains 0A000000050001A1  contains 0000000000000000
     // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 5000      -GL-A--KREV  LARGE PAGE pfn 5103
     // ```
-    let tr = virt_reader.translate(0xfffff80123103ba0.into()).unwrap();
+    let tr = virt_reader.translate(0xffff_f801_2310_3ba0.into()).unwrap();
     assert!(!tr.writable);
     assert!(tr.executable);
     assert!(!tr.user_accessible);
@@ -751,7 +759,7 @@ fn large_page() {
     // contains 0A00000104B61863  contains 0A00000104B62863  contains 0A000000EA030863  contains 8A000000408FF963
     // pfn 104b61    ---DA--KWEV  pfn 104b62    ---DA--KWEV  pfn ea030     ---DA--KWEV  pfn 408ff     -G-DA--KW-V
     // ```
-    let tr = virt_reader.translate(0xffffa587dcc2f650.into()).unwrap();
+    let tr = virt_reader.translate(0xffff_a587_dcc2_f650.into()).unwrap();
     assert!(tr.writable);
     assert!(!tr.executable);
     assert!(!tr.user_accessible);
@@ -783,7 +791,7 @@ fn large_page() {
         )) if fault_gva == gva
     ));
 
-    let gva = 0xffffffff_ffffffff.into();
+    let gva = 0xffff_ffff_ffff_ffff.into();
     assert!(matches!(
         virt_reader.translate(gva),
         Err(Error::PageRead(
@@ -805,17 +813,17 @@ fn partial_phys() {
     // Physical memory read at 15000 failed
     // ```
     assert!(matches!(
-        phys_reader.read(0x14ff0.into(), &mut buffer),
+        phys_reader.read(0x01_4f_f0.into(), &mut buffer),
         Ok(0x10)
     ));
 
     assert!(matches!(
-        phys_reader.read_exact(0x14ff0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
+        phys_reader.read_exact(0x01_4f_f0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
         Err(Error::PartialRead {
             expected_amount,
             actual_amount: 0x10,
             reason: PageReadError::NotInDump { gva: None, gpa }
-        }) if expected_amount == buffer.len() && gpa == 0x15000.into()
+        }) if expected_amount == buffer.len() && gpa == 0x01_50_00.into()
     ));
 
     // ```text
@@ -825,12 +833,12 @@ fn partial_phys() {
     // #   16000 00 04 04 03 50 6e 70 5a-00 00 00 00 00 00 00 00 ....PnpZ........
     // ```
     assert!(matches!(
-        phys_reader.read(0x15ff0.into(), &mut buffer),
+        phys_reader.read(0x01_5f_f0.into(), &mut buffer),
         Ok(0)
     ));
 
     assert!(matches!(
-        phys_reader.read_exact(0x15ff0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
-        Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: None, gpa }, .. }) if gpa == 0x15ff0.into()
+        phys_reader.read_exact(0x01_5f_f0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
+        Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: None, gpa }, .. }) if gpa == 0x01_5f_f0.into()
     ));
 }
