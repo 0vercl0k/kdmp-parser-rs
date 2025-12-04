@@ -27,10 +27,6 @@ impl Debug for MappedFileReader<'_> {
 
 impl MappedFileReader<'_> {
     /// Create a new [`MappedFileReader`] from a path using a memory map.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be opened or memory mapped.
     pub fn new(path: impl AsRef<Path>) -> io::Result<Self> {
         // Open the file..
         let file = File::open(path)?;
