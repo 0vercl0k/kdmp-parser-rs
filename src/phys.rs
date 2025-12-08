@@ -34,7 +34,8 @@ impl<'parser> Reader<'parser> {
     }
 
     /// Read the exact amount of bytes asked by the user & return a
-    /// `PartialRead` error if it couldn't read as much as wanted.
+    /// [`Error::PartialRead`] error if it couldn't read as much as
+    /// wanted.
     pub fn read_exact(&self, gpa: Gpa, buf: &mut [u8]) -> Result<()> {
         // Amount of bytes left to read.
         let mut amount_left = buf.len();

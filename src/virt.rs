@@ -186,7 +186,7 @@ impl<'parser> Reader<'parser> {
     }
 
     /// Read the exact amount of bytes asked by the user & return a
-    /// `PartialRead` error if it couldn't read as much as wanted.
+    /// [`Error::PartialRead`] error if it couldn't read as much as wanted.
     pub fn read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<()> {
         // Amount of bytes left to read.
         let mut amount_left = buf.len();
@@ -287,23 +287,17 @@ impl<'parser> Reader<'parser> {
         Ok(unsafe { t.assume_init() })
     }
 
-    /// Try to translate `gva` into [`Gpa`]. Returns `Some` if the translation
-    /// is successful, `None` if it fails because a page is not present or that
-    /// a physical page doesn't exist in the dump.
+    /// Try to translate `gva` into [`Gpa`].
     pub fn try_translate(&self, gva: Gva) -> Result<Option<Translation>> {
         ignore_non_fatal(self.translate(gva))
     }
 
-    /// Try to read the exact amount of bytes asked by the user. Returns `Some`
-    /// if successful, `None` if it fails because a page is not present or that
-    /// a physical page doesn't exist in the dump..
+    /// Try to read the exact amount of bytes asked by the user.
     pub fn try_read_exact(&self, gva: Gva, buf: &mut [u8]) -> Result<Option<()>> {
         ignore_non_fatal(self.read_exact(gva, buf))
     }
 
-    /// Try to read a `T` from virtual memory. Returns `Some` if the translation
-    /// is successful, `None` if it fails because a page is not present or that
-    /// a physical page doesn't exist in the dump.
+    /// Try to read a `T` from virtual memory.
     pub fn try_read_struct<T: Pod>(&self, gva: Gva) -> Result<Option<T>> {
         ignore_non_fatal(self.read_struct(gva))
     }

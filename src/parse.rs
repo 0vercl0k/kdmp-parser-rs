@@ -86,11 +86,6 @@ impl Debug for KernelDumpParser {
 
 impl KernelDumpParser {
     /// Create an instance from a [`Reader`] & parse the file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the dump is malformed or if we encounter an I/O
-    /// error.
     pub fn with_reader(mut reader: impl Reader + 'static) -> Result<Self> {
         // Parse the dump header and check if things look right.
         let headers = Box::new(read_struct::<Header64>(&mut reader)?);
@@ -161,10 +156,6 @@ impl KernelDumpParser {
 
     /// Create an instance from a file path; depending on the file size, it'll
     /// either memory maps it or open it as a regular file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file can't be memory mapped or opened.
     pub fn new(dump_path: impl AsRef<Path>) -> Result<Self> {
         const FOUR_GIGS: u64 = 1_024 * 1_024 * 1_024 * 4;
         // We'll assume that if you are opening a dump file larger than 4gb, you don't
@@ -220,20 +211,12 @@ impl KernelDumpParser {
     }
 
     /// Seek to `pos`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file cannot be seeked to `pos`.
-    pub fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
+    pub(crate) fn seek(&self, pos: io::SeekFrom) -> Result<u64> {
         Ok(self.reader.borrow_mut().seek(pos)?)
     }
 
     /// Read however many bytes in `buf` and returns the amount of bytes read.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if it encountered any kind of I/O error.
-    pub fn read_exact(&self, buf: &mut [u8]) -> Result<()> {
+    pub(crate) fn read_exact(&self, buf: &mut [u8]) -> Result<()> {
         Ok(self.reader.borrow_mut().read_exact(buf)?)
     }
 

@@ -1,7 +1,7 @@
 <div align='center'>
   <h1><code>kdmp-parser</code></h1>
   <p>
-    <strong>A <a href="https://en.wikipedia.org/wiki/KISS_principle">KISS</a>, dependency free Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.</strong>
+    <strong>A <a href="https://en.wikipedia.org/wiki/KISS_principle">KISS</a>, dependency free, Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.</strong>
   </p>
   <p>
     <a href="https://crates.io/crates/kdmp-parser"><img src="https://img.shields.io/crates/v/kdmp-parser.svg" /></a>
@@ -24,9 +24,9 @@ The [parser](src/examples/parser.rs) application is a small utility to show-case
 
 Here are the options supported:
 ```text
-A KISS Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.
+A KISS, dependency free, Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.
 
-Usage: parser.exe [OPTIONS] <DUMP_PATH>
+Usage: parser.exe [OPTIONS] -- <DUMP_PATH>
 
 Arguments:
   <DUMP_PATH>
@@ -42,7 +42,7 @@ Options:
   -e, --exception-record
           Dump the exception record
 
-  -m, --mem[=<MEM>]
+  -m, --mem [<MEM>]
           Dump the first `len` bytes of every physical pages, unless an address is specified
 
       --virt
@@ -51,16 +51,19 @@ Options:
       --len <LEN>
           The number of bytes to dump out
 
-          [default: 16]
+          [default: 128]
+
+      --dtb <DTB>
+          Directory table base address to use for virtual memory translations
 
   -r, --reader <READER>
           Reader mode
 
-          [default: mmap]
-
           Possible values:
           - mmap: The crash-dump is memory-mapped
           - file: The crash-dump is read as a file on disk
+
+          [default: mmap]
 
       --modules
           Dump the list of kernel & user modules
