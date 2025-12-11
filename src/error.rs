@@ -78,7 +78,7 @@ impl Display for PageReadError {
             PageReadError::NotInDump { gva, gpa } => match gva {
                 Some((gva, Some(which_pxe))) => write!(
                     f,
-                    "{gpa} was needed while translating {gva} at the {which_pxe:?} level but is missing from the dump)"
+                    "{gpa} was needed while translating {gva} at the {which_pxe} level but is missing from the dump)"
                 ),
                 Some((gva, None)) => write!(f, "{gpa} backs {gva} but is missing from the dump)"),
                 None => {
