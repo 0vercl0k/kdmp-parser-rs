@@ -17,6 +17,17 @@ pub enum PxeKind {
     Pte,
 }
 
+impl Display for PxeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PxeKind::Pml4e => write!(f, "PML4E"),
+            PxeKind::Pdpte => write!(f, "PDPTE"),
+            PxeKind::Pde => write!(f, "PDE"),
+            PxeKind::Pte => write!(f, "PTE"),
+        }
+    }
+}
+
 /// Represent the fundamental reason a single page read can fail.
 #[derive(Debug, Clone)]
 pub enum PageReadError {
@@ -62,7 +73,7 @@ impl Display for PageReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PageReadError::NotPresent { gva, which_pxe } => {
-                write!(f, "{gva} isn't present at the {which_pxe:?} level")
+                write!(f, "{gva} isn't present at the {which_pxe} level")
             }
             PageReadError::NotInDump { gva, gpa } => match gva {
                 Some((gva, Some(which_pxe))) => write!(
