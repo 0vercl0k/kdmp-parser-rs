@@ -7,7 +7,10 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use kdmp_parser::{Gpa, Gva, Gxa, KernelDumpParser, MappedFileReader};
+use kdmp_parser::gxa::{Gpa, Gva, Gxa};
+use kdmp_parser::map::MappedFileReader;
+use kdmp_parser::parse::KernelDumpParser;
+use kdmp_parser::{phys, virt};
 
 #[derive(Debug, Default, Clone, Copy, ValueEnum)]
 enum ReaderMode {
@@ -18,10 +21,12 @@ enum ReaderMode {
     File,
 }
 
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Parser, Debug)]
 #[command(version, about)]
 struct Args {
     /// The dump path.
+    #[arg(last = true)]
     dump_path: PathBuf,
     /// Dump the dump headers.
     #[arg(long, default_value_t = false)]
@@ -65,7 +70,7 @@ fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
         let wanted_left = wanted_len - i;
         // Do we need a full row or less?
         let left_to_display = min(wanted_left, 16);
-        print!("{:016x}: ", address + (i as u64 * 16));
+        print!("{:016x}: ", address + i as u64);
 
         // Iterate over the row now and populate it with the data. We do this because
         // the output first displays the hexadecimal value of every bytes, and then its
@@ -73,29 +78,26 @@ fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
         let mut row_it = row.iter_mut().enumerate().peekable();
         while let Some((idx, item)) = row_it.next() {
             // Drain the data iterator byte by byte and fill the row with the data.
-            match data_it.next() {
-                Some(c) => {
-                    // If we have a byte, then easy peasy.
-                    *item = Some(*c);
-                    print!("{:02x}", c);
+            if let Some(c) = data_it.next() {
+                // If we have a byte, then easy peasy.
+                *item = Some(*c);
+                print!("{c:02x}");
+            } else {
+                *item = None;
+                // If we don't have a byte, then we need to figure out what to do. There are two
+                // cases to take care of:
+                let displayed_amount = i + idx;
+                if displayed_amount >= wanted_len {
+                    // - either what is left to display is not a full row, in which case we need to
+                    //   display spaces to padd the output such that the upcoming ASCII
+                    //   representation stays aligned.
+                    print!("  ");
+                } else {
+                    // - either the user asked a larger length than what is mapped in memory, in
+                    //   which case we need to display `??` for those bytes.
+                    print!("??");
                 }
-                None => {
-                    *item = None;
-                    // If we don't have a byte, then we need to figure out what to do. There are two
-                    // cases to take care of:
-                    let displayed_amount = i + idx;
-                    if displayed_amount >= wanted_len {
-                        // - either what is left to display is not a full row, in which case we need
-                        //   to display spaces to padd the output such that the upcoming ASCII
-                        //   representation stays aligned.
-                        print!("  ");
-                    } else {
-                        // - either the user asked a larger length than what is mapped in memory, in
-                        //   which case we need to display `??` for those bytes.
-                        print!("??");
-                    }
-                }
-            };
+            }
 
             // We separate half of the row with a dash. But we only want to display it if
             // there'll be at least one byte after it (so at least 9 bytes to display in
@@ -117,7 +119,7 @@ fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
                 print!("?");
             }
         }
-        println!()
+        println!();
     }
 }
 
@@ -169,21 +171,23 @@ fn main() -> Result<()> {
     if let Some(addr) = args.mem {
         let mut buffer = vec![0; args.len];
         let addr = to_hex(&addr)?;
+        let phys_reader = phys::Reader::new(&parser);
+        let virt_reader = virt::Reader::with_dtb(
+            &parser,
+            args.dtb
+                .unwrap_or(Gpa::new(parser.headers().directory_table_base)),
+        );
+
         if addr == u64::MAX {
             for (gpa, _) in parser.physmem() {
-                parser.phys_read_exact(gpa, &mut buffer)?;
-                hexdump(gpa.u64(), &buffer, args.len)
+                phys_reader.read_exact(gpa, &mut buffer)?;
+                hexdump(gpa.u64(), &buffer, args.len);
             }
         } else {
             let amount = if args.virt {
-                parser.virt_read_with_dtb(
-                    Gva::new(addr),
-                    &mut buffer,
-                    args.dtb
-                        .unwrap_or(Gpa::new(parser.headers().directory_table_base)),
-                )
+                virt_reader.read(Gva::new(addr), &mut buffer)
             } else {
-                parser.phys_read(Gpa::new(addr), &mut buffer)
+                phys_reader.read(Gpa::new(addr), &mut buffer)
             };
 
             if let Ok(amount) = amount {

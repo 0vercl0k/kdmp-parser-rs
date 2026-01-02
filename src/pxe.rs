@@ -5,32 +5,104 @@
 //! # Examples
 //!
 //! ```
-//! # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+//! # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
 //! let pxe = Pxe::new(
 //!     Pfn::new(0x6d600),
-//!     PxeFlags::UserAccessible | PxeFlags::Accessed | PxeFlags::Present
+//!     PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT
 //! );
 //! let encoded = u64::from(pxe);
 //! let decoded = Pxe::from(encoded);
 //! ```
-use bitflags::bitflags;
+use std::ops::{BitOr, Deref};
 
-use crate::Gpa;
+use crate::bits::Bits;
+use crate::gxa::Gpa;
 
-bitflags! {
-    /// The various bits and flags that a [`Pxe`] has.
-    #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Default, PartialOrd, Ord)]
-    pub struct PxeFlags : u64 {
-        const Present = 1 << 0;
-        const Writable = 1 << 1;
-        const UserAccessible = 1 << 2;
-        const WriteThrough = 1 << 3;
-        const CacheDisabled = 1 << 4;
-        const Accessed = 1 << 5;
-        const Dirty = 1 << 6;
-        const LargePage = 1 << 7;
-        const Transition = 1 << 11;
-        const NoExecute = 1 << 63;
+/// The various bits and flags that a [`Pxe`] has.
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Default, PartialOrd, Ord)]
+pub struct PxeFlags(u64);
+
+impl PxeFlags {
+    pub const ACCESSED: Self = Self(1 << 5);
+    pub const CACHE_DISABLED: Self = Self(1 << 4);
+    pub const DIRTY: Self = Self(1 << 6);
+    pub const LARGE_PAGE: Self = Self(1 << 7);
+    pub const NO_EXECUTE: Self = Self(1 << 63);
+    pub const PRESENT: Self = Self(1 << 0);
+    pub const TRANSITION: Self = Self(1 << 11);
+    pub const USER_ACCESSIBLE: Self = Self(1 << 2);
+    pub const WRITABLE: Self = Self(1 << 1);
+    pub const WRITE_THROUGH: Self = Self(1 << 3);
+
+    #[must_use]
+    pub fn new(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    #[must_use]
+    pub fn present(&self) -> bool {
+        self.0.bit(0) != 0
+    }
+
+    #[must_use]
+    pub fn writable(&self) -> bool {
+        self.0.bit(1) != 0
+    }
+
+    #[must_use]
+    pub fn user_accessible(&self) -> bool {
+        self.0.bit(2) != 0
+    }
+
+    #[must_use]
+    pub fn write_through(&self) -> bool {
+        self.0.bit(3) != 0
+    }
+
+    #[must_use]
+    pub fn cache_disabled(&self) -> bool {
+        self.0.bit(4) != 0
+    }
+
+    #[must_use]
+    pub fn accessed(&self) -> bool {
+        self.0.bit(5) != 0
+    }
+
+    #[must_use]
+    pub fn dirty(&self) -> bool {
+        self.0.bit(6) != 0
+    }
+
+    #[must_use]
+    pub fn large_page(&self) -> bool {
+        self.0.bit(7) != 0
+    }
+
+    #[must_use]
+    pub fn transition(&self) -> bool {
+        self.0.bit(11) != 0
+    }
+
+    #[must_use]
+    pub fn no_execute(&self) -> bool {
+        self.0.bit(63) != 0
+    }
+}
+
+impl BitOr for PxeFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self::new(*self | *rhs)
+    }
+}
+
+impl Deref for PxeFlags {
+    type Target = u64;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -39,7 +111,8 @@ bitflags! {
 /// # Examples
 ///
 /// ```
-/// # use kdmp_parser::{Pfn, Gpa};
+/// # use kdmp_parser::gxa::Gpa;
+/// # use kdmp_parser::pxe::Pfn;
 /// # fn main() {
 /// let pfn = Pfn::new(0x1337);
 /// assert_eq!(pfn.gpa(), Gpa::new(0x1337000));
@@ -49,18 +122,22 @@ bitflags! {
 pub struct Pfn(u64);
 
 impl Pfn {
+    #[must_use]
     pub const fn new(pfn: u64) -> Self {
         Self(pfn)
     }
 
+    #[must_use]
     pub const fn u64(&self) -> u64 {
         self.0
     }
 
+    #[must_use]
     pub const fn gpa(&self) -> Gpa {
         Gpa::from_pfn(*self)
     }
 
+    #[must_use]
     pub const fn gpa_with_offset(&self, offset: u64) -> Gpa {
         Gpa::from_pfn_with_offset(*self, offset)
     }
@@ -79,9 +156,6 @@ impl From<Pfn> for u64 {
 }
 
 /// A [`Pxe`] is a set of flags ([`PxeFlags`]) and a Page Frame Number (PFN).
-/// This representation takes more space than a regular `PXE` but it is more
-/// convenient to split the flags / the pfn as [`bitflags!`] doesn't seem to
-/// support bitfields.
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq, Default, PartialOrd, Ord)]
 pub struct Pxe {
     /// The PFN of the next table or the final page.
@@ -96,15 +170,16 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let pxe = Pxe::new(
     ///     Pfn::new(0x6d600),
-    ///     PxeFlags::UserAccessible | PxeFlags::Accessed | PxeFlags::Present
+    ///     PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT
     /// );
     /// assert_eq!(pxe.pfn.u64(), 0x6d600);
     /// # }
     /// ```
+    #[must_use]
     pub fn new(pfn: Pfn, flags: PxeFlags) -> Self {
         Self { pfn, flags }
     }
@@ -114,22 +189,23 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let p = Pxe::new(
     ///     Pfn::new(0x6d600),
-    ///     PxeFlags::Present
+    ///     PxeFlags::PRESENT
     /// );
     /// assert!(p.present());
     /// let np = Pxe::new(
     ///     Pfn::new(0x1337),
-    ///     PxeFlags::UserAccessible
+    ///     PxeFlags::USER_ACCESSIBLE
     /// );
     /// assert!(!np.present());
     /// # }
     /// ```
+    #[must_use]
     pub fn present(&self) -> bool {
-        self.flags.contains(PxeFlags::Present)
+        self.flags.present()
     }
 
     /// Is it a large page?
@@ -137,22 +213,23 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let p = Pxe::new(
     ///     Pfn::new(0x6d600),
-    ///     PxeFlags::LargePage
+    ///     PxeFlags::LARGE_PAGE
     /// );
     /// assert!(p.large_page());
     /// let np = Pxe::new(
     ///     Pfn::new(0x1337),
-    ///     PxeFlags::UserAccessible
+    ///     PxeFlags::USER_ACCESSIBLE
     /// );
     /// assert!(!np.large_page());
     /// # }
     /// ```
+    #[must_use]
     pub fn large_page(&self) -> bool {
-        self.flags.contains(PxeFlags::LargePage)
+        self.flags.large_page()
     }
 
     /// Is it a transition PTE?
@@ -160,7 +237,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let p = Pxe::from(0x166B7880);
     /// let np = Pxe::from(0xA000000077AF867);
@@ -168,8 +245,9 @@ impl Pxe {
     /// assert!(!np.transition());
     /// # }
     /// ```
+    #[must_use]
     pub fn transition(&self) -> bool {
-        !self.present() && self.flags.contains(PxeFlags::Transition)
+        !self.present() && self.flags.transition()
     }
 
     /// Is the memory described by this [`Pxe`] writable?
@@ -177,7 +255,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let w = Pxe::from(0x2709063);
     /// let ro = Pxe::from(0x8A00000002C001A1);
@@ -185,8 +263,9 @@ impl Pxe {
     /// assert!(!ro.writable());
     /// # }
     /// ```
+    #[must_use]
     pub fn writable(&self) -> bool {
-        self.flags.contains(PxeFlags::Writable)
+        self.flags.writable()
     }
 
     /// Is the memory described by this [`Pxe`] executable?
@@ -194,7 +273,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let x = Pxe::from(0x270a063);
     /// let nx = Pxe::from(0x8A00000002C001A1);
@@ -202,8 +281,9 @@ impl Pxe {
     /// assert!(!nx.executable());
     /// # }
     /// ```
+    #[must_use]
     pub fn executable(&self) -> bool {
-        !self.flags.contains(PxeFlags::NoExecute)
+        !self.flags.no_execute()
     }
 
     /// Is the memory described by this [`Pxe`] accessible by user-mode?
@@ -211,7 +291,7 @@ impl Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let u = Pxe::from(0x8000000F34E5025);
     /// let s = Pxe::from(0x270A063);
@@ -219,8 +299,9 @@ impl Pxe {
     /// assert!(!s.user_accessible());
     /// # }
     /// ```
+    #[must_use]
     pub fn user_accessible(&self) -> bool {
-        self.flags.contains(PxeFlags::UserAccessible)
+        self.flags.user_accessible()
     }
 }
 
@@ -231,16 +312,18 @@ impl From<u64> for Pxe {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let pxe = Pxe::from(0x6D_60_00_25);
     /// assert_eq!(pxe.pfn.u64(), 0x6d600);
-    /// assert_eq!(pxe.flags, PxeFlags::UserAccessible | PxeFlags::Accessed | PxeFlags::Present);
+    /// assert_eq!(pxe.flags, PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT);
     /// # }
     /// ```
     fn from(value: u64) -> Self {
-        let pfn = Pfn::new((value >> 12) & 0xf_ffff_ffff);
-        let flags = PxeFlags::from_bits(value & PxeFlags::all().bits()).expect("PxeFlags");
+        const PFN_MASK: u64 = 0xffff_ffff_f000;
+        const FLAGS_MASK: u64 = !PFN_MASK;
+        let pfn = Pfn::new((value & PFN_MASK) >> 12);
+        let flags = PxeFlags::new(value & FLAGS_MASK);
 
         Self::new(pfn, flags)
     }
@@ -253,11 +336,11 @@ impl From<Pxe> for u64 {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::{Pxe, PxeFlags, Pfn};
+    /// # use kdmp_parser::pxe::{Pxe, PxeFlags, Pfn};
     /// # fn main() {
     /// let pxe = Pxe::new(
     ///     Pfn::new(0x6d600),
-    ///     PxeFlags::UserAccessible | PxeFlags::Accessed | PxeFlags::Present,
+    ///     PxeFlags::USER_ACCESSIBLE | PxeFlags::ACCESSED | PxeFlags::PRESENT,
     /// );
     /// assert_eq!(u64::from(pxe), 0x6D_60_00_25);
     /// # }
@@ -265,6 +348,6 @@ impl From<Pxe> for u64 {
     fn from(pxe: Pxe) -> Self {
         debug_assert!(pxe.pfn.u64() <= 0xf_ffff_ffffu64);
 
-        pxe.flags.bits() | (pxe.pfn.u64() << 12u64)
+        *pxe.flags | (pxe.pfn.u64() << 12u64)
     }
 }

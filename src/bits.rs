@@ -5,7 +5,7 @@
 //! //! # Examples
 //!
 //! ```
-//! # use kdmp_parser::Bits;
+//! # use kdmp_parser::bits::Bits;
 //! let v = 0xAB_CD_EF_01_23_45_67_89u64;
 //! assert_eq!(v.bits(0..=63), v);
 //! assert_eq!(v.bits(0..=55), 0xCD_EF_01_23_45_67_89);
@@ -16,9 +16,11 @@ use std::ops::RangeInclusive;
 /// Utility trait to make it easier to extract ranges of bits.
 pub trait Bits: Sized {
     /// Get a range of bits.
+    #[must_use]
     fn bits(&self, r: RangeInclusive<usize>) -> Self;
 
     /// Get a bit.
+    #[must_use]
     fn bit(&self, n: usize) -> Self {
         self.bits(n..=n)
     }

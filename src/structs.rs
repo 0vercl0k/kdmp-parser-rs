@@ -2,10 +2,31 @@
 //! This has all the raw structures that makes up Windows kernel crash-dumps.
 use std::collections::BTreeMap;
 use std::fmt::Debug;
-use std::{io, mem, slice};
 
-use crate::error::Result;
-use crate::{Gpa, KdmpParserError, Reader};
+use crate::error::{Error, Result};
+use crate::gxa::Gpa;
+
+/// We use this `Pod` trait to implement / constraint the `*read_struct`
+/// functions. For the functions to work as expected and be safe, here is the
+/// rule that a type `T` needs to follow to be `Pod`:
+///   - `T` should not contain a field / type that have invalid bit patterns (no
+///     `char`, no `bool`, no pointers). We will read bytes from a file and
+///     basically `transmute` those bytes to `T` so all possible bit patterns
+///     should be 'fine'.
+///
+/// # Safety
+///
+/// Implementing this trait for a type `T` requires that `T` is safe to
+/// initialize from any arbitrary bit pattern. This means:
+/// - `T` must not contain types with invalid bit patterns (e.g., `bool`,
+///   `char`, references, pointers)
+/// - All possible byte patterns must represent valid values of `T`
+/// - This is required because bytes are read from a file and transmuted to `T`
+pub unsafe trait Pod {}
+
+unsafe impl Pod for u64 {}
+unsafe impl Pod for u32 {}
+unsafe impl Pod for u16 {}
 
 /// The different kind of physical pages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +41,7 @@ pub enum PageKind {
 
 impl PageKind {
     /// Size in bytes of the page.
+    #[must_use]
     pub fn size(&self) -> u64 {
         match self {
             Self::Normal => 4 * 1_024,
@@ -29,6 +51,7 @@ impl PageKind {
     }
 
     /// Extract the page offset of `addr`.
+    #[must_use]
     pub fn page_offset(&self, addr: u64) -> u64 {
         let mask = self.size() - 1;
 
@@ -40,12 +63,12 @@ impl PageKind {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u32)]
 pub enum DumpType {
-    // Old dump types from dbgeng.dll
+    // Old dump types from `dbgeng.dll`.
     Full = 0x1,
     Bmp = 0x5,
     /// Produced by `.dump /m`.
     // Mini = 0x4,
-    /// (22H2+) Produced by TaskMgr > System > Create live kernel Memory Dump.
+    /// (22H2+) Produced by `TaskMgr > System > Create live kernel Memory Dump`.
     LiveKernelMemory = 0x6,
     /// Produced by `.dump /k`.
     KernelMemory = 0x8,
@@ -59,7 +82,7 @@ pub enum DumpType {
 pub type PhysmemMap = BTreeMap<Gpa, u64>;
 
 impl TryFrom<u32> for DumpType {
-    type Error = KdmpParserError;
+    type Error = Error;
 
     fn try_from(value: u32) -> Result<Self> {
         match value {
@@ -69,7 +92,7 @@ impl TryFrom<u32> for DumpType {
             x if x == DumpType::KernelAndUserMemory as u32 => Ok(DumpType::KernelAndUserMemory),
             x if x == DumpType::CompleteMemory as u32 => Ok(DumpType::CompleteMemory),
             x if x == DumpType::LiveKernelMemory as u32 => Ok(DumpType::LiveKernelMemory),
-            _ => Err(KdmpParserError::UnknownDumpType(value)),
+            _ => Err(Error::UnknownDumpType(value)),
         }
     }
 }
@@ -132,6 +155,8 @@ pub struct Header64 {
     reserved1: [u8; 4008],
 }
 
+unsafe impl Pod for Header64 {}
+
 impl Debug for Header64 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Header64")
@@ -163,7 +188,7 @@ impl Debug for Header64 {
             .field("kd_secondary_version", &self.kd_secondary_version)
             .field("attributes", &self.attributes)
             .field("boot_id", &self.boot_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -183,19 +208,22 @@ pub struct BmpHeader64 {
     //    )]],
     // # The offset of the first page in the file.
     // 'FirstPage': [0x20, ['unsigned long long']],
-    padding1: [u8; 0x20 - (0x4 + mem::size_of::<u32>())],
+    padding1: [u8; 0x20 - (0x4 + size_of::<u32>())],
     /// The offset of the first page in the file.
     pub first_page: u64,
     /// Total number of pages present in the bitmap.
     pub total_present_pages: u64,
     /// Total number of pages in image. This dictates the total size of the
-    /// bitmap.This is not the same as the TotalPresentPages which is only
+    /// bitmap. This is not the same as the `TotalPresentPages` which is only
     /// the sum of the bits set to 1.
     pub pages: u64,
     // Bitmap follows
 }
 
+unsafe impl Pod for BmpHeader64 {}
+
 impl BmpHeader64 {
+    #[must_use]
     pub fn looks_good(&self) -> bool {
         (self.signature == BMPHEADER64_EXPECTED_SIGNATURE
             || self.signature == BMPHEADER64_EXPECTED_SIGNATURE2)
@@ -209,6 +237,8 @@ pub struct PhysmemRun {
     pub base_page: u64,
     pub page_count: u64,
 }
+
+unsafe impl Pod for PhysmemRun {}
 
 impl PhysmemRun {
     /// Calculate a physical address from a run and an index.
@@ -233,13 +263,15 @@ pub struct PhysmemDesc {
     // PHYSMEM_RUN Run[1]; follows
 }
 
+unsafe impl Pod for PhysmemDesc {}
+
 impl TryFrom<&[u8]> for PhysmemDesc {
-    type Error = KdmpParserError;
+    type Error = Error;
 
     fn try_from(slice: &[u8]) -> Result<Self> {
-        let expected_len = mem::size_of::<Self>();
+        let expected_len = size_of::<Self>();
         if slice.len() < expected_len {
-            return Err(KdmpParserError::InvalidData("physmem desc is too small"));
+            return Err(Error::InvalidData("physmem desc is too small"));
         }
 
         let number_of_runs = u32::from_le_bytes((&slice[0..4]).try_into().unwrap());
@@ -319,6 +351,8 @@ pub struct Context {
     pub last_exception_from_rip: u64,
 }
 
+unsafe impl Pod for Context {}
+
 impl Debug for Context {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Context")
@@ -379,31 +413,8 @@ impl Debug for Context {
             .field("last_branch_from_rip", &self.last_branch_from_rip)
             .field("last_exception_to_rip", &self.last_exception_to_rip)
             .field("last_exception_from_rip", &self.last_exception_from_rip)
-            .finish()
+            .finish_non_exhaustive()
     }
-}
-
-/// Peek for a `T` from the cursor.
-pub fn peek_struct<T>(reader: &mut impl Reader) -> Result<T> {
-    let mut s = mem::MaybeUninit::uninit();
-    let size_of_s = mem::size_of_val(&s);
-    let slice_over_s = unsafe { slice::from_raw_parts_mut(s.as_mut_ptr() as *mut u8, size_of_s) };
-
-    let pos = reader.stream_position()?;
-    reader.read_exact(slice_over_s)?;
-    reader.seek(io::SeekFrom::Start(pos))?;
-
-    Ok(unsafe { s.assume_init() })
-}
-
-/// Read a `T` from the cursor.
-pub fn read_struct<T>(reader: &mut impl Reader) -> Result<T> {
-    let s = peek_struct(reader)?;
-    let size_of_s = mem::size_of_val(&s);
-
-    reader.seek(io::SeekFrom::Current(size_of_s.try_into().unwrap()))?;
-
-    Ok(s)
 }
 
 const RDMP_HEADER64_EXPECTED_MARKER: u32 = 0x40;
@@ -423,6 +434,7 @@ pub struct RdmpHeader64 {
 }
 
 impl RdmpHeader64 {
+    #[must_use]
     pub fn looks_good(&self) -> bool {
         if self.marker != RDMP_HEADER64_EXPECTED_MARKER {
             return false;
@@ -453,6 +465,8 @@ pub struct KernelRdmpHeader64 {
     // Bitmap follows
 }
 
+unsafe impl Pod for KernelRdmpHeader64 {}
+
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct FullRdmpHeader64 {
@@ -464,6 +478,8 @@ pub struct FullRdmpHeader64 {
     // Bitmap follows
 }
 
+unsafe impl Pod for FullRdmpHeader64 {}
+
 #[repr(C)]
 #[derive(Debug, Default)]
 pub struct PfnRange {
@@ -471,24 +487,30 @@ pub struct PfnRange {
     pub number_of_pages: u64,
 }
 
+unsafe impl Pod for PfnRange {}
+
 #[repr(C)]
 #[derive(Debug, Default)]
-pub struct ListEntry<P> {
+pub struct ListEntry<P: Pod> {
     pub flink: P,
     pub blink: P,
 }
 
+unsafe impl<P: Pod> Pod for ListEntry<P> {}
+
 #[repr(C)]
 #[derive(Debug, Default)]
-pub struct UnicodeString<P> {
+pub struct UnicodeString<P: Pod> {
     pub length: u16,
     pub maximum_length: u16,
     pub buffer: P,
 }
 
+unsafe impl<P: Pod> Pod for UnicodeString<P> {}
+
 #[derive(Debug, Default)]
 #[repr(C)]
-pub struct LdrDataTableEntry<P> {
+pub struct LdrDataTableEntry<P: Pod> {
     pub in_load_order_links: ListEntry<P>,
     pub in_memory_order_links: ListEntry<P>,
     pub in_initialization_order_links: ListEntry<P>,
@@ -498,6 +520,8 @@ pub struct LdrDataTableEntry<P> {
     pub full_dll_name: UnicodeString<P>,
     pub base_dll_name: UnicodeString<P>,
 }
+
+unsafe impl<P: Pod> Pod for LdrDataTableEntry<P> {}
 
 // Copied from `WDBGEXTS.H`.
 #[repr(C)]
@@ -513,6 +537,8 @@ pub struct DbgKdDebugDataHeader64 {
     pub size: u32,
 }
 
+unsafe impl Pod for DbgKdDebugDataHeader64 {}
+
 // https://github.com/tpn/winsdk-10/blob/9b69fd26ac0c7d0b83d378dba01080e93349c2ed/Include/10.0.14393.0/um/WDBGEXTS.H#L1206C16-L1206C34
 #[repr(C)]
 #[derive(Debug, Default)]
@@ -520,18 +546,18 @@ pub struct KdDebuggerData64 {
     pub header: DbgKdDebugDataHeader64,
     /// Base address of kernel image
     pub kern_base: u64,
-    /// DbgBreakPointWithStatus is a function which takes an argument
-    /// and hits a breakpoint.  This field contains the address of the
-    /// breakpoint instruction.  When the debugger sees a breakpoint
+    /// `DbgBreakPointWithStatus` is a function which takes an argument
+    /// and hits a breakpoint. This field contains the address of the
+    /// breakpoint instruction. When the debugger sees a breakpoint
     /// at this address, it may retrieve the argument from the first
     /// argument register, or on x86 the eax register.
     pub breakpoint_with_status: u64,
     /// Address of the saved context record during a bugcheck
-    /// N.B. This is an automatic in KeBugcheckEx's frame, and
+    /// N.B. This is an automatic in `KeBugcheckEx`'s frame, and
     /// is only valid after a bugcheck.
     pub saved_context: u64,
     /// The address of the thread structure is provided in the
-    /// WAIT_STATE_CHANGE packet.  This is the offset from the base of
+    /// `WAIT_STATE_CHANGE` packet.  This is the offset from the base of
     /// the thread structure to the pointer to the kernel stack frame
     /// for the currently active usermode callback.
     pub th_callback_stack: u16,
@@ -679,18 +705,9 @@ pub struct KdDebuggerData64 {
     // ...
 }
 
-#[cfg(test)]
-mod tests {
-    use std::mem;
+unsafe impl Pod for KdDebuggerData64 {}
 
-    use crate::structs::{Context, Header64, PhysmemDesc, PhysmemRun};
-
-    /// Ensure that the sizes of key structures are right.
-    #[test]
-    fn layout() {
-        assert_eq!(mem::size_of::<PhysmemDesc>(), 0x10);
-        assert_eq!(mem::size_of::<PhysmemRun>(), 0x10);
-        assert_eq!(mem::size_of::<Header64>(), 0x2_000);
-        assert_eq!(mem::size_of::<Context>(), 0x4d0);
-    }
-}
+const _: () = assert!(size_of::<PhysmemDesc>() == 0x10);
+const _: () = assert!(size_of::<PhysmemRun>() == 0x10);
+const _: () = assert!(size_of::<Header64>() == 0x2_000);
+const _: () = assert!(size_of::<Context>() == 0x4d0);
