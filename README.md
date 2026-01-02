@@ -27,14 +27,16 @@ Reading the physical or the virtual memory space from a crash-dump can fail beca
 
 If you prefer to read and ignore those memory errors, use [`virt::Reader::read`](https://docs.rs/kdmp-parser/0.8.0/kdmp_parser/struct.Reader.html#method.read). It won't tell you why it might have failed to read as much as you wanted, but it will tell you how many bytes it successfully read. Similarly, if you want it to read a fixed amount of bytes (and still ignore memory read errors), use [`virt::Reader::try_read_exact`](https://docs.rs/kdmp-parser/0.8.0/kdmp_parser/struct.Reader.html#method.try_read_exact).
 
-If you care to know why a virtual translation failed, or why it wasn't able to read a certain page; use [`virt::Reader::read_exact`].
+If you care to know why a virtual translation failed, or why it wasn't able to read a certain page; use [`virt::Reader::read_exact`](tps://docs.rs/kdmp-parser/0.8.0/kdmp_parser/struct.Reader.html#method.read_exact).
 
 ## Parser
+
 The [parser](src/examples/parser.rs) application is a small utility to show-case how to use the library and demonstrate its features. You can use it to dump memory, etc.
 
 ![parser-usage](https://github.com/0vercl0k/kdmp-parser-rs/raw/main/pics/parser.gif)
 
 Here are the options supported:
+
 ```text
 A KISS, dependency free, Rust crate to parse Windows kernel crash-dumps created by Windows & its debugger.
 

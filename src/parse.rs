@@ -63,7 +63,6 @@ pub struct KernelDumpParser {
     headers: Box<Header64>,
     /// This maps a physical address to a file offset. Seeking there gives the
     /// page content.
-    /// XXX: Is this pub(crate) fair?
     pub(crate) physmem: PhysmemMap,
     /// The [`Reader`] object that allows us to seek / read the dump file which
     /// could be memory mapped, read from a file, etc.
