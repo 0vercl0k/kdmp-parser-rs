@@ -9,7 +9,6 @@ include = ["/Cargo.toml", "/LICENSE", "/src/**", "/examples/**", "README.md"]
 keywords = ["windows", "kernel", "crashdump"]
 license = "MIT"
 repository = "https://github.com/0vercl0k/kdmp-parser-rs"
-rust-version = "1.91"
 
 [dev-dependencies]
 anyhow = "1.0"
