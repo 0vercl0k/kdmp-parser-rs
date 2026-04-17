@@ -273,7 +273,7 @@ impl KernelDumpParser {
         }
 
         let remaining_bits = bmp_header.pages % 8;
-        let bitmap_size = bmp_header.pages.next_multiple_of(8) / 8;
+        let bitmap_size = bmp_header.pages.div_ceil(8);
         let mut page_offset = bmp_header.first_page;
         let mut physmem = PhysmemMap::new();
 

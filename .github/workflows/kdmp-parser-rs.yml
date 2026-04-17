@@ -12,7 +12,7 @@ jobs:
     steps:
     - name: Cache Artifacts
       id: cache-testdatas
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         key: kdmp-parser-testdatas-cache
         path: .
@@ -22,7 +22,7 @@ jobs:
         curl ${{ env.TESTDATA_URL }}  -O -L
         7z x testdatas.7z; rm testdatas.7z
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         if-no-files-found: error
         name: kdmp-parser-testdatas-cache
@@ -33,7 +33,7 @@ jobs:
     name: fmt
     steps:
       - name: Checkout 
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up rust
         run: rustup default nightly
@@ -49,10 +49,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up rust
-        run: rustup default stable
+        run: rustup default stable && rustup update
 
       - name: cargo clippy
         env:
@@ -64,10 +64,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up rust
-        run: rustup default stable
+        run: rustup default stable && rustup update
 
       - name: cargo doc
         env:
@@ -85,13 +85,13 @@ jobs:
     name: build & test / ${{ matrix.os }}
     steps:
       - name: Checkout 
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up rust
-        run: rustup default stable
+        run: rustup default stable && rustup update
 
       - name: Retrieve testdatas
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: kdmp-parser-testdatas-cache
           path: .
@@ -113,7 +113,7 @@ jobs:
         run: cargo build --release --examples
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: parser-${{ matrix.os }}
           path: |
