@@ -33,7 +33,7 @@ jobs:
     name: fmt
     steps:
       - name: Checkout 
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up rust
         run: rustup default nightly
@@ -49,10 +49,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up rust
-        run: rustup default stable
+        run: rustup default stable && rustup update
 
       - name: cargo clippy
         env:
@@ -64,10 +64,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout 
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up rust
-        run: rustup default stable
+        run: rustup default stable && rustup update
 
       - name: cargo doc
         env:
@@ -85,13 +85,13 @@ jobs:
     name: build & test / ${{ matrix.os }}
     steps:
       - name: Checkout 
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up rust
-        run: rustup default stable
+        run: rustup default stable && rustup update
 
       - name: Retrieve testdatas
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: kdmp-parser-testdatas-cache
           path: .
