@@ -942,7 +942,10 @@ fn rdmp_range_table_bounds_are_checked() {
             truncated,
             "PFN range table extends past the end of the file",
         ),
-        (unaligned, "PFN range table size is not a multiple of sizeof::<PfnRange>()"),
+        (
+            unaligned,
+            "PFN range table size is not a multiple of sizeof::<PfnRange>()",
+        ),
     ] {
         let res = KernelDumpParser::with_reader(Cursor::new(data));
         assert!(
