@@ -451,12 +451,16 @@ pub struct RdmpHeader64 {
     reserved1: u32,
     pub metadata_size: u64,
     pub first_page_offset: u64,
-    // Bitmap follows
 }
 
 impl RdmpHeader64 {
     #[must_use]
     pub fn looks_good(&self) -> bool {
+        // Metadata is made out of:
+        // - a [`PhysmemDesc`]
+        // - an array of [`PfnRange`]s (at least one).
+        // Note that the [`RdmpHeader64`] itself is not part of the metadata.
+        const MIN_METADATA_LEN: u64 = (size_of::<PhysmemDesc>() + size_of::<PfnRange>()) as u64;
         if self.marker != RDMP_HEADER64_EXPECTED_MARKER {
             return false;
         }
@@ -469,15 +473,51 @@ impl RdmpHeader64 {
             return false;
         }
 
-        // Make sure that the values don't underflow.
-        if let Some(metadata) = self.metadata_size.checked_sub(0x20)
-            && let Some(first_page) = self.first_page_offset.checked_sub(0x20_40)
-            && metadata == first_page
-        {
-            true
-        } else {
-            false
+        if self.metadata_size < MIN_METADATA_LEN {
+            return false;
         }
+
+        // To make this a bit clearer, here is a picture of the layout:
+        //
+        // ```text
+        // File offset
+        //              +---------------------------------------------+
+        // 0x0000       | Header64 (0x2000 bytes)                     |
+        //              |                                             |
+        //              |                                             |
+        //              +---------------------------------------------+
+        // 0x2000       | RdmpHeader64 (0x20 bytes)                   |
+        //              |   marker / signatures / reserved            |
+        //              |   metadata_size          (u64)              |
+        //              |   first_page_offset      (u64)              |
+        //              +---------------------------------------------+--+
+        // 0x2020       | PhysmemDesc (0x10 bytes)                    |  |
+        //              |   number_of_ranges       (u32)              |  |
+        //              |   padding1               (u32)              |  |
+        //              |   number_of_pages        (u64)              |  |
+        //              +---------------------------------------------+  |
+        // 0x2030       | PfnRange[0] (0x10 bytes)                    |  |
+        //              |   base PFN               (u64)              |  |
+        //              |   number_of_pages        (u64)              |  |
+        //              +---------------------------------------------+  | metadata_size
+        //              | PfnRange[1]                                 |  |
+        //              |   ...                                       |  |
+        //              +---------------------------------------------+  |
+        //              | ...                                         |  |
+        //              +---------------------------------------------+  |
+        //              | PfnRange[N - 1]                             |  |
+        //              |                                             |  |
+        //              +---------------------------------------------+--+
+        // first_page_  | Physical page data                          |
+        // offset       |   Pages packed consecutively, in range      |
+        //              |   order; each physical page is 0x1000 bytes |
+        //              +---------------------------------------------+
+        // ```
+        // Metadata begins after [`Header64`] and this header
+        // ([`RdmpHeader64`]).
+        let metadata_offset = (size_of::<Header64>() + size_of::<Self>()) as u64;
+
+        metadata_offset.checked_add(self.metadata_size) == Some(self.first_page_offset)
     }
 }
 
@@ -489,7 +529,7 @@ pub struct KernelRdmpHeader64 {
     pub hdr: RdmpHeader64,
     unknown1: u64,
     unknown2: u64,
-    // Bitmap follows
+    // [`PfnRange`] array follows.
 }
 
 unsafe impl Pod for KernelRdmpHeader64 {}
@@ -502,7 +542,7 @@ pub struct FullRdmpHeader64 {
     reserved1: u16,
     reserved2: u16,
     pub total_number_of_pages: u64,
-    // Bitmap follows
+    // [`PfnRange`] array follows.
 }
 
 unsafe impl Pod for FullRdmpHeader64 {}

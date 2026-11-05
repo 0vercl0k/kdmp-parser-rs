@@ -877,6 +877,81 @@ fn synthetic_dump(dump_type: DumpType, patch: impl Fn(&mut [u8]), tail: &[u8]) -
     data
 }
 
+/// Builds a one-range RDMP dump declaring `pages`, with one backed page
+/// (PFN:0x1'000).
+fn synthetic_rdmp_dump(dump_type: DumpType, pages: u64) -> Vec<u8> {
+    #[repr(C)]
+    struct Synthetic {
+        hdr: RdmpHeader64,
+        desc: PhysmemDesc,
+        range: PfnRange,
+    }
+
+    unsafe impl Pod for Synthetic {}
+
+    let mut data = vec![0u8; size_of::<Synthetic>()];
+    let d = pod_mut::<Synthetic>(&mut data).unwrap();
+    d.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
+    d.hdr.signature = RDMP_HEADER64_EXPECTED_SIGNATURE;
+    d.hdr.valid_dump = RDMP_HEADER64_EXPECTED_VALID_DUMP;
+    d.hdr.metadata_size = (size_of::<PhysmemDesc>() + size_of::<PfnRange>()) as u64;
+    d.hdr.first_page_offset = (size_of::<Header64>() + size_of::<Synthetic>()) as u64;
+    d.desc.number_of_runs = 1;
+    d.desc.number_of_pages = pages;
+    d.range.page_file_number = 1;
+    d.range.number_of_pages = pages;
+
+    // A single physical page (full of 0x41s) backing PFN:0x1'000.
+    data.extend_from_slice(&[0x41; 0x1_000]);
+    synthetic_dump(dump_type, |_| {}, &data)
+}
+
+#[test]
+fn rdmp_range_table_does_not_include_page_data() {
+    for dump_type in [
+        DumpType::KernelMemory,
+        DumpType::KernelAndUserMemory,
+        DumpType::CompleteMemory,
+    ] {
+        let parser =
+            KernelDumpParser::with_reader(Cursor::new(synthetic_rdmp_dump(dump_type, 1))).unwrap();
+        assert_eq!(parser.gpas().collect::<Vec<_>>(), [Gpa::new(0x1_000)]);
+
+        let mut buffer = [0; 0x1_000];
+        phys::Reader::new(&parser)
+            .read_exact(Gpa::new(0x1_000), &mut buffer)
+            .unwrap();
+        assert_eq!(buffer, [0x41; 0x1_000]);
+    }
+}
+
+#[test]
+fn rdmp_range_table_bounds_are_checked() {
+    let mut truncated = synthetic_rdmp_dump(DumpType::KernelMemory, 1);
+    truncated.truncate(
+        size_of::<Header64>() + size_of::<KernelRdmpHeader64>() + size_of::<PfnRange>() - 1,
+    );
+
+    let mut unaligned = synthetic_rdmp_dump(DumpType::KernelMemory, 1);
+    let h = pod_mut::<RdmpHeader64>(&mut unaligned[size_of::<Header64>()..]).unwrap();
+    h.metadata_size += 1;
+    h.first_page_offset += 1;
+
+    for (data, expected) in [
+        (
+            truncated,
+            "PFN range table extends past the end of the file",
+        ),
+        (unaligned, "PFN range table size is not a multiple of 16"),
+    ] {
+        let res = KernelDumpParser::with_reader(Cursor::new(data));
+        assert!(
+            matches!(res, Err(Error::InvalidData(e)) if e == expected),
+            "expected {expected:?}, got {res:?}"
+        );
+    }
+}
+
 #[test]
 fn header_counts_checked_against_file_length() {
     let bmp_header = |pages: u64, first_page: u64| {
@@ -938,30 +1013,9 @@ fn header_counts_checked_against_file_length() {
             ),
             "bitmap extends past the end of the file",
         ),
-        // Kernel dump with a range of 2^36 pages.
+        // Kernel dump with a range of 2^36 pages (but only one backed page).
         (
-            synthetic_dump(DumpType::KernelMemory, |_| {}, &{
-                #[repr(C)]
-                struct Synthetic {
-                    hdr: KernelRdmpHeader64,
-                    range: PfnRange,
-                }
-
-                unsafe impl Pod for Synthetic {}
-
-                let mut r = vec![0u8; size_of::<Synthetic>()];
-                let d = pod_mut::<Synthetic>(&mut r).unwrap();
-                d.hdr.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
-                d.hdr.hdr.signature = RDMP_HEADER64_EXPECTED_SIGNATURE;
-                d.hdr.hdr.valid_dump = RDMP_HEADER64_EXPECTED_VALID_DUMP;
-                d.hdr.hdr.metadata_size =
-                    (size_of::<RdmpHeader64>() + size_of::<PfnRange>()) as u64;
-                d.hdr.hdr.first_page_offset = 0x2_050;
-                d.range.number_of_pages = 1;
-                d.range.page_file_number = 1 << 36;
-
-                r
-            }),
+            synthetic_rdmp_dump(DumpType::KernelMemory, 1 << 36),
             "run doesn't fit",
         ),
     ];
@@ -1000,18 +1054,31 @@ fn cyclic_module_list_is_dropped() {
 
 #[test]
 fn small_rdmp_sizes_do_not_underflow() {
-    let mut data = vec![0; size_of::<KernelRdmpHeader64>()];
-    let h = pod_mut::<KernelRdmpHeader64>(&mut data).unwrap();
-    h.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
-    h.hdr.signature = RDMP_HEADER64_EXPECTED_SIGNATURE;
-    h.hdr.valid_dump = RDMP_HEADER64_EXPECTED_VALID_DUMP;
-    // See [`RdmpHeader64::looks_good`].
-    h.hdr.metadata_size = 0x20 - 1;
-    h.hdr.first_page_offset = 0x20_40 - 1;
-    let data = synthetic_dump(DumpType::KernelMemory, |_| {}, &data);
+    // Invalid sizes must fail header validation, not a later parser check.
+    // The final case would wrap to metadata_offset - 1 with unchecked addition.
+    let metadata_offset = (size_of::<Header64>() + size_of::<RdmpHeader64>()) as u64;
+    for (metadata_size, first_page_offset) in [
+        (0x20 - 1, 0x20_40),
+        (0x20, 0x20_40 - 1),
+        (0x20 - 1, 0x20_40 - 1),
+        (u64::MAX, metadata_offset - 1),
+    ] {
+        let mut data = vec![0; size_of::<KernelRdmpHeader64>()];
+        let h = pod_mut::<KernelRdmpHeader64>(&mut data).unwrap();
+        h.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
+        h.hdr.signature = RDMP_HEADER64_EXPECTED_SIGNATURE;
+        h.hdr.valid_dump = RDMP_HEADER64_EXPECTED_VALID_DUMP;
+        h.hdr.metadata_size = metadata_size;
+        h.hdr.first_page_offset = first_page_offset;
+        let data = synthetic_dump(DumpType::KernelMemory, |_| {}, &data);
+        let res = KernelDumpParser::with_reader(Cursor::new(data));
 
-    assert!(matches!(
-        KernelDumpParser::with_reader(Cursor::new(data)),
-        Err(Error::InvalidData(_))
-    ));
+        assert!(
+            matches!(
+                res,
+                Err(Error::InvalidData("RdmpHeader64 doesn't look right"))
+            ),
+            "metadata_size={metadata_size:#x}, first_page_offset={first_page_offset:#x}: {res:?}"
+        );
+    }
 }

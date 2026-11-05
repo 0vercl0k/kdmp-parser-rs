@@ -421,13 +421,28 @@ impl KernelDumpParser {
             return Err(Error::InvalidData("no first page or metadata size"));
         }
 
-        let pfn_range_size = size_of::<PfnRange>();
-        if (metadata_size % pfn_range_size as u64) != 0 {
-            return Err(Error::InvalidData("metadata size is not a multiple of 8"));
+        // `metadata_size` includes the [`PhysmemDesc`] already consumed
+        // as part of reading [`KernelRdmpHeader64`] / [`FullRdmpHeader64`].
+        // Only the bytes between the current position and the first
+        // page contain [`PfnRange`]s.
+        let pfn_ranges_len = page_offset
+            .checked_sub(reader.stream_position()?)
+            .ok_or(Error::InvalidData("first page precedes PFN range table"))?;
+        let pfn_range_size = size_of::<PfnRange>() as u64;
+        if !pfn_ranges_len.is_multiple_of(pfn_range_size) {
+            return Err(Error::InvalidData(
+                "PFN range table size is not a multiple of sizeof::<PfnRange>()",
+            ));
         }
 
-        let number_pfns = metadata_size / pfn_range_size as u64;
         let reader_len = reader_len(reader)?;
+        if page_offset > reader_len {
+            return Err(Error::InvalidData(
+                "PFN range table extends past the end of the file",
+            ));
+        }
+
+        let number_pfns = pfn_ranges_len / pfn_range_size;
         let mut physmem = Builder::new();
 
         for _ in 0..number_pfns {
