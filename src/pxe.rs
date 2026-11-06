@@ -13,7 +13,7 @@
 //! let encoded = u64::from(pxe);
 //! let decoded = Pxe::from(encoded);
 //! ```
-use std::ops::{BitOr, Deref};
+use std::ops::{Add, BitOr, Deref, Sub};
 
 use crate::bits::Bits;
 use crate::gxa::Gpa;
@@ -140,6 +140,22 @@ impl Pfn {
     #[must_use]
     pub const fn gpa_with_offset(&self, offset: u64) -> Gpa {
         Gpa::from_pfn_with_offset(*self, offset)
+    }
+}
+
+impl Sub for Pfn {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::Output::new(self.u64() - rhs.u64())
+    }
+}
+
+impl Add<u64> for Pfn {
+    type Output = Self;
+
+    fn add(self, rhs: u64) -> Self::Output {
+        Self::Output::new(self.u64() + rhs)
     }
 }
 

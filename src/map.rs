@@ -62,7 +62,8 @@ impl Drop for MappedFileReader<'_> {
 cfg_select! {
     windows => {
         #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
-        // Memory mapping on Windows using `CreateFileMappingA` / `MapViewOfFile`.
+        // Memory mapping on Windows using `CreateFileMappingA` /
+        // `MapViewOfFile`.
         mod windows {
             use std::fs::File;
             use std::os::windows::prelude::AsRawHandle;
@@ -79,8 +80,8 @@ cfg_select! {
             type LPVOID = *const u8;
 
             unsafe extern "system" {
-                /// Creates or opens a named or unnamed file mapping object for a
-                /// specified file.
+                /// Creates or opens a named or unnamed file mapping object for
+                /// a specified file.
                 ///
                 /// <https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createfilemappinga>
                 fn CreateFileMappingA(
@@ -92,8 +93,8 @@ cfg_select! {
                     name: LPCSTR,
                 ) -> HANDLE;
 
-                /// Maps a view of a file mapping into the address space of a calling
-                /// process.
+                /// Maps a view of a file mapping into the address space of a
+                /// calling process.
                 ///
                 /// <https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile>
                 fn MapViewOfFile(
@@ -109,8 +110,8 @@ cfg_select! {
                 /// <https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle>
                 fn CloseHandle(h: HANDLE) -> BOOL;
 
-                /// Unmaps a mapped view of a file from the calling process's address
-                /// space.
+                /// Unmaps a mapped view of a file from the calling process's
+                /// address space.
                 ///
                 /// <https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-unmapviewoffile>
                 fn UnmapViewOfFile(base_address: LPVOID) -> BOOL;
@@ -138,8 +139,8 @@ cfg_select! {
                     return Err(io::Error::last_os_error());
                 }
 
-                // Grab the size of the underlying file, this will be the size of the
-                // view.
+                // Grab the size of the underlying file, this will be the size
+                // of the view.
                 let size = file.metadata()?.len().try_into().unwrap();
 
                 // Map the view in the address space.
@@ -147,35 +148,40 @@ cfg_select! {
 
                 // If the base address is NULL, it failed so let's bail.
                 if base.is_null() {
-                    // Don't forget to close the HANDLE we created for the mapping.
+                    // Don't forget to close the HANDLE we created for the
+                    // mapping.
                     unsafe {
                         CloseHandle(mapping_handle);
                     }
                     return Err(io::Error::last_os_error());
                 }
 
-                // Now we materialized a view in the address space, we can get rid of
-                // the mapping handle.
+                // Now we materialized a view in the address space, we can get
+                // rid of the mapping handle.
                 unsafe {
                     CloseHandle(mapping_handle);
                 }
 
-                // Make sure the size is not bigger than what [`slice::from_raw_parts`] wants.
+                // Make sure the size is not bigger than what
+                // [`slice::from_raw_parts`] wants.
                 assert!(size <= isize::MAX.try_into().unwrap(), "slice is too large");
 
                 // Create the slice over the mapping.
                 // SAFETY: This is safe because:
-                //   - It is a byte slice, so we don't need to care about the alignment.
-                //   - The base is not NULL as we've verified that it is the case above.
+                //   - It is a byte slice, so we don't need to care about the
+                //     alignment.
+                //   - The base is not NULL as we've verified that it is the
+                //     case above.
                 //   - The underlying is owned by the type and the lifetime.
-                //   - We asked the OS to map `size` bytes, so we have a guarantee that there's
-                //     `size` consecutive bytes.
-                //   - We never give a mutable reference to this slice, so it can't get mutated.
-                //   - The total len of the slice is guaranteed to be smaller than
-                //     [`isize::MAX`].
-                //   - The underlying mapping, the type and the slice have the same lifetime
-                //     which guarantees that we can't access the underlying once it has been
-                //     unmapped (use-after-unmap).
+                //   - We asked the OS to map `size` bytes, so we have a
+                //     guarantee that there's `size` consecutive bytes.
+                //   - We never give a mutable reference to this slice, so it
+                //     can't get mutated.
+                //   - The total len of the slice is guaranteed to be smaller
+                //     than [`isize::MAX`].
+                //   - The underlying mapping, the type and the slice have the
+                //     same lifetime which guarantees that we can't access the
+                //     underlying once it has been unmapped (use-after-unmap).
                 Ok(unsafe { slice::from_raw_parts(base, size) })
             }
 
@@ -188,14 +194,13 @@ cfg_select! {
             }
         }
 
-        use windows::memory_map_file;
-        use windows::unmap_memory_mapped_file;
+        use windows::{memory_map_file, unmap_memory_mapped_file};
     }
     unix => {
         mod unix {
             // Memory mapping on Unix using the mmap syscall.
-            use std::os::fd::AsRawFd;
             use std::fs::File;
+            use std::os::fd::AsRawFd;
             use std::{io, ptr, slice};
 
             const PROT_READ: i32 = 1;
@@ -219,8 +224,8 @@ cfg_select! {
                 // Grab the underlying file descriptor.
                 let file_fd = file.as_raw_fd();
 
-                // Grab the size of the underlying file. This will be the size of the
-                // memory mapped region.
+                // Grab the size of the underlying file. This will be the size
+                // of the memory mapped region.
                 let size = file.metadata()?.len().try_into().unwrap();
 
                 // Mmap the file.
@@ -231,22 +236,26 @@ cfg_select! {
                     return Err(io::Error::last_os_error());
                 }
 
-                // Make sure the size is not bigger than what [`slice::from_raw_parts`] wants.
+                // Make sure the size is not bigger than what
+                // [`slice::from_raw_parts`] wants.
                 assert!(size <= isize::MAX.try_into().unwrap(), "slice is too large");
 
                 // Create the slice over the mapping.
                 // SAFETY: This is safe because:
-                //   - It is a byte slice, so we don't need to care about the alignment.
-                //   - The base is not NULL as we've verified that it is the case above.
+                //   - It is a byte slice, so we don't need to care about the
+                //     alignment.
+                //   - The base is not NULL as we've verified that it is the
+                //     case above.
                 //   - The underlying is owned by the type and the lifetime.
-                //   - We asked the OS to map `size` bytes, so we have a guarantee that there's
-                //     `size` consecutive bytes.
-                //   - We never give a mutable reference to this slice, so it can't get mutated.
-                //   - The total len of the slice is guaranteed to be smaller than
-                //     [`isize::MAX`].
-                //   - The underlying mapping, the type and the slice have the same lifetime
-                //     which guarantees that we can't access the underlying once it has been
-                //     unmapped (use-after-unmap).
+                //   - We asked the OS to map `size` bytes, so we have a
+                //     guarantee that there's `size` consecutive bytes.
+                //   - We never give a mutable reference to this slice, so it
+                //     can't get mutated.
+                //   - The total len of the slice is guaranteed to be smaller
+                //     than [`isize::MAX`].
+                //   - The underlying mapping, the type and the slice have the
+                //     same lifetime which guarantees that we can't access the
+                //     underlying once it has been unmapped (use-after-unmap).
                 Ok(unsafe { slice::from_raw_parts(ret, size) })
             }
 
@@ -259,8 +268,9 @@ cfg_select! {
             }
         }
 
-        use unix::memory_map_file;
-        use unix::unmap_memory_mapped_file;
+        use unix::{memory_map_file, unmap_memory_mapped_file};
     }
-    _ => { panic!("Your system hasn't been implemented; if you do it, send a PR!"); }
+    _ => {
+        panic!("Your system hasn't been implemented; if you do it, send a PR!");
+    }
 }

@@ -72,36 +72,41 @@ fn hexdump(address: u64, data: &[u8], wanted_len: usize) {
         let left_to_display = min(wanted_left, 16);
         print!("{:016x}: ", address + i as u64);
 
-        // Iterate over the row now and populate it with the data. We do this because
-        // the output first displays the hexadecimal value of every bytes, and then its
-        // ASCII representation.
+        // Iterate over the row now and populate it with the data. We do this
+        // because the output first displays the hexadecimal value of
+        // every bytes, and then its ASCII representation.
         let mut row_it = row.iter_mut().enumerate().peekable();
         while let Some((idx, item)) = row_it.next() {
-            // Drain the data iterator byte by byte and fill the row with the data.
+            // Drain the data iterator byte by byte and fill the row with the
+            // data.
             if let Some(c) = data_it.next() {
                 // If we have a byte, then easy peasy.
                 *item = Some(*c);
                 print!("{c:02x}");
             } else {
                 *item = None;
-                // If we don't have a byte, then we need to figure out what to do. There are two
-                // cases to take care of:
+                // If we don't have a byte, then we need to figure out what to
+                // do. There are two cases to take care of:
                 let displayed_amount = i + idx;
                 if displayed_amount >= wanted_len {
-                    // - either what is left to display is not a full row, in which case we need to
-                    //   display spaces to padd the output such that the upcoming ASCII
-                    //   representation stays aligned.
+                    // - either what is left to display is not a full row, in
+                    //   which case we need to display spaces to padd the output
+                    //   such that the upcoming ASCII representation stays
+                    //   aligned.
                     print!("  ");
                 } else {
-                    // - either the user asked a larger length than what is mapped in memory, in
-                    //   which case we need to display `??` for those bytes.
+                    // - either the user asked a larger length than what is
+                    //   mapped in memory, in which case we need to display `??`
+                    //   for those bytes.
                     print!("??");
                 }
             }
 
-            // We separate half of the row with a dash. But we only want to display it if
-            // there'll be at least one byte after it (so at least 9 bytes to display in
-            // this row; otherwise it'd be surrounded by spaces which looks odd).
+            // We separate half of the row with a dash. But we only want to
+            // display it if there'll be at least one byte after it
+            // (so at least 9 bytes to display in
+            // this row; otherwise it'd be surrounded by spaces which looks
+            // odd).
             if left_to_display >= 9 && idx == 7 {
                 print!("-");
             } else if row_it.peek().is_some() {
@@ -179,7 +184,7 @@ fn main() -> Result<()> {
         );
 
         if addr == u64::MAX {
-            for (gpa, _) in parser.physmem() {
+            for gpa in parser.gpas() {
                 phys_reader.read_exact(gpa, &mut buffer)?;
                 hexdump(gpa.u64(), &buffer, args.len);
             }

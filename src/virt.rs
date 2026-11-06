@@ -107,8 +107,9 @@ impl<'parser> Reader<'parser> {
         let read_pxe = |gpa: Gpa, pxe: PxeKind| -> Result<Pxe> {
             let r = phys::Reader::new(self.parser);
             let Ok(pxe) = r.read_struct::<u64>(gpa).map(Pxe::from) else {
-                // If the physical page isn't in the dump, enrich the error by adding the gva
-                // that was getting translated as well as the pxe level we were at.
+                // If the physical page isn't in the dump, enrich the error by
+                // adding the gva that was getting translated as
+                // well as the pxe level we were at.
                 return Err(PageReadError::NotInDump {
                     gva: Some((gva, Some(pxe))),
                     gpa,
@@ -143,8 +144,8 @@ impl<'parser> Reader<'parser> {
         }
 
         // huge pages:
-        // 7 (PS) - Page size; must be 1 (otherwise, this entry references a page
-        // directory; see Table 4-1.
+        // 7 (PS) - Page size; must be 1 (otherwise, this entry references a
+        // page directory; see Table 4-1.
         let pd_base = pdpte.pfn.gpa();
         if pdpte.large_page() {
             return Ok(Translation::huge_page(&[pml4e, pdpte], gva));
@@ -161,8 +162,8 @@ impl<'parser> Reader<'parser> {
         }
 
         // large pages:
-        // 7 (PS) - Page size; must be 1 (otherwise, this entry references a page
-        // table; see Table 4-18.
+        // 7 (PS) - Page size; must be 1 (otherwise, this entry references a
+        // page table; see Table 4-18.
         let pt_base = pde.pfn.gpa();
         if pde.large_page() {
             return Ok(Translation::large_page(&[pml4e, pdpte, pde], gva));
@@ -171,8 +172,8 @@ impl<'parser> Reader<'parser> {
         let pte_gpa = Gpa::new(pt_base.u64() + (gva.pte_idx() * 8));
         let pte = read_pxe(pte_gpa, PxeKind::Pte)?;
         if !pte.present() {
-            // We'll allow reading from a transition PTE, so return an error only if it's
-            // not one, otherwise we'll carry on.
+            // We'll allow reading from a transition PTE, so return an error
+            // only if it's not one, otherwise we'll carry on.
             if !pte.transition() {
                 return Err(PageReadError::NotPresent {
                     gva,
@@ -210,12 +211,13 @@ impl<'parser> Reader<'parser> {
                 Err(e) => return Err(e),
             };
 
-            // We need to take care of reads that straddle different virtual memory pages.
-            // First, figure out the maximum amount of bytes we can read off this page.
+            // We need to take care of reads that straddle different virtual
+            // memory pages. First, figure out the maximum amount of
+            // bytes we can read off this page.
             let left_in_page =
-                usize::try_from(translation.page_kind.size() - translation.offset).unwrap();
-            // Then, either we read it until its end, or we stop before if we can get by
-            // with less.
+                usize::try_from(translation.page_kind.len() - translation.offset).unwrap();
+            // Then, either we read it until its end, or we stop before if we
+            // can get by with less.
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
@@ -229,7 +231,8 @@ impl<'parser> Reader<'parser> {
                     reason: PageReadError::NotInDump { gva: None, gpa },
                     ..
                 }) => {
-                    // Augment `NotInDump` with the `gva` as `phys::Reader::read_exact` doesn't know
+                    // Augment `NotInDump` with the `gva` as
+                    // `phys::Reader::read_exact` doesn't know
                     // anything about it.
                     let reason = PageReadError::NotInDump {
                         gva: Some((addr, None)),
@@ -243,15 +246,17 @@ impl<'parser> Reader<'parser> {
                     });
                 }
                 Err(Error::PartialRead { .. }) => {
-                    // We should never get there; `phys::Reader::read_exact` can only return a
-                    // [`PageReadError::NotInDump`] error if it cannot read the gpa because it
-                    // isn't in the dump.
+                    // We should never get there; `phys::Reader::read_exact` can
+                    // only return a
+                    // [`PageReadError::NotInDump`] error if it cannot read the
+                    // gpa because it isn't in the dump.
                     unreachable!();
                 }
                 Err(e) => return Err(e),
             }
 
-            // Update the total amount of read bytes and how much work we have left.
+            // Update the total amount of read bytes and how much work we have
+            // left.
             total_read += amount_wanted;
             amount_left -= amount_wanted;
             // We have more work to do, so let's move to the next page.

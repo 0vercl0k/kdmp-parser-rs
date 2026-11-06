@@ -93,16 +93,11 @@ impl Display for PageReadError {
 pub enum Error {
     InvalidUnicodeString,
     Utf16(FromUtf16Error),
-    Overflow(&'static str),
     Io(io::Error),
     InvalidData(&'static str),
     UnknownDumpType(u32),
-    DuplicateGpa(Gpa),
     InvalidSignature(u32),
     InvalidValidDump(u32),
-    PhysAddrOverflow(u32, u64),
-    PageOffsetOverflow(u32, u64),
-    BitmapPageOffsetOverflow(u64, usize),
     PartialRead {
         expected_amount: usize,
         actual_amount: usize,
@@ -134,13 +129,9 @@ impl Display for Error {
         match self {
             Self::InvalidUnicodeString => write!(f, "invalid UNICODE_STRING"),
             Self::Utf16(_) => write!(f, "utf16"),
-            Self::Overflow(o) => write!(f, "overflow: {o}"),
             Self::Io(_) => write!(f, "io"),
             Self::InvalidData(i) => write!(f, "invalid data: {i}"),
             Self::UnknownDumpType(u) => write!(f, "unsupported dump type {u:#x}"),
-            Self::DuplicateGpa(gpa) => {
-                write!(f, "duplicate gpa found in physmem map for {gpa}")
-            }
             Self::InvalidSignature(sig) => write!(
                 f,
                 "header's signature looks wrong: {sig:#x} vs {DUMP_HEADER64_EXPECTED_SIGNATURE:#x}"
@@ -148,16 +139,6 @@ impl Display for Error {
             Self::InvalidValidDump(dump) => write!(
                 f,
                 "header's valid dump looks wrong: {dump:#x} vs {DUMP_HEADER64_EXPECTED_VALID_DUMP:#x}"
-            ),
-            Self::PhysAddrOverflow(run, page) => {
-                write!(f, "overflow for phys addr w/ run {run} page {page}")
-            }
-            Self::PageOffsetOverflow(run, page) => {
-                write!(f, "overflow for page offset w/ run {run} page {page}")
-            }
-            Self::BitmapPageOffsetOverflow(bitmap_idx, bit_idx) => write!(
-                f,
-                "overflow for page offset w/ bitmap_idx {bitmap_idx} bit_idx {bit_idx}"
             ),
             Self::PartialRead {
                 expected_amount,

@@ -8,6 +8,7 @@ pub mod gxa;
 pub mod map;
 pub mod parse;
 pub mod phys;
+pub mod physindex;
 pub mod pxe;
 pub mod structs;
 pub mod virt;

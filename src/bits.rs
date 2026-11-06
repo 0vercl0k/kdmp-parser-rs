@@ -50,8 +50,9 @@ where
             (1 << n) - 1
         };
 
-        // This cannot fail as we are zero extending `Self` into a `u128` and then the
-        // `mask` cannot index outside the bit capacity of `Self`.
+        // This cannot fail as we are zero extending `Self` into a `u128` and
+        // then the `mask` cannot index outside the bit capacity of
+        // `Self`.
         T::try_from(base & mask).unwrap()
     }
 }

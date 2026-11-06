@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use crate::error::{Error, Result};
 use crate::gxa::Gpa;
 
-/// We use this `Pod` trait to implement / constraint the `*read_struct`
+/// We use this `Pod` trait to implement / constraint the `read_struct`
 /// functions. For the functions to work as expected and be safe, here is the
 /// rule that a type `T` needs to follow to be `Pod`:
 ///   - `T` should not contain a field / type that have invalid bit patterns (no
@@ -40,9 +40,10 @@ pub enum PageKind {
 }
 
 impl PageKind {
-    /// Size in bytes of the page.
+    /// Length in bytes of the page.
+    #[expect(clippy::len_without_is_empty)]
     #[must_use]
-    pub fn size(&self) -> u64 {
+    pub const fn len(&self) -> u64 {
         match self {
             Self::Normal => 4 * 1_024,
             Self::Large => 2 * 1_024 * 1_024,
@@ -52,8 +53,8 @@ impl PageKind {
 
     /// Extract the page offset of `addr`.
     #[must_use]
-    pub fn page_offset(&self, addr: u64) -> u64 {
-        let mask = self.size() - 1;
+    pub const fn page_offset(&self, addr: u64) -> u64 {
+        let mask = self.len() - 1;
 
         addr & mask
     }
@@ -192,9 +193,9 @@ impl Debug for Header64 {
     }
 }
 
-const BMPHEADER64_EXPECTED_SIGNATURE: u32 = 0x50_4D_44_53; // 'PMDS'
-const BMPHEADER64_EXPECTED_SIGNATURE2: u32 = 0x50_4D_44_46; // 'PMDF'
-const BMPHEADER64_EXPECTED_VALID_DUMP: u32 = 0x50_4D_55_44; // 'PMUD'
+pub const BMPHEADER64_EXPECTED_SIGNATURE: u32 = 0x50_4D_44_53; // 'PMDS'
+pub const BMPHEADER64_EXPECTED_SIGNATURE2: u32 = 0x50_4D_44_46; // 'PMDF'
+pub const BMPHEADER64_EXPECTED_VALID_DUMP: u32 = 0x50_4D_55_44; // 'PMUD'
 
 #[derive(Debug, Default)]
 #[repr(C)]
@@ -241,16 +242,36 @@ pub struct PhysmemRun {
 unsafe impl Pod for PhysmemRun {}
 
 impl PhysmemRun {
-    /// Calculate a physical address from a run and an index.
+    /// Calculate a physical address from a page index.
     ///
     /// The formulae is: (`base_page` + `page_idx`) * `PageKind::Normal.size()`.
-    pub fn phys_addr(&self, page_idx: u64) -> Option<Gpa> {
-        debug_assert!(page_idx < self.page_count);
+    pub fn page_phys_addr(&self, page_idx: u64) -> Option<Gpa> {
+        if page_idx >= self.page_count {
+            return None;
+        }
 
         self.base_page
             .checked_add(page_idx)?
-            .checked_mul(PageKind::Normal.size())
+            .checked_mul(PageKind::Normal.len())
             .map(Gpa::new)
+    }
+
+    /// The GPA of the first page described by this run.
+    #[must_use]
+    pub fn first_page_phys_addr(&self) -> Option<Gpa> {
+        self.page_phys_addr(0)
+    }
+
+    /// The GPA of the last page described by this run.
+    #[must_use]
+    pub fn last_page_phys_addr(&self) -> Option<Gpa> {
+        self.page_phys_addr(self.page_count.checked_sub(1)?)
+    }
+
+    // Total length in bytes of the run.
+    #[must_use]
+    pub fn total_len(&self) -> Option<u64> {
+        self.page_count.checked_mul(PageKind::Normal.len())
     }
 }
 
@@ -417,9 +438,9 @@ impl Debug for Context {
     }
 }
 
-const RDMP_HEADER64_EXPECTED_MARKER: u32 = 0x40;
-const RDMP_HEADER64_EXPECTED_SIGNATURE: u32 = 0x50_4D_44_52; // 'PMDR'
-const RDMP_HEADER64_EXPECTED_VALID_DUMP: u32 = 0x50_4D_55_44; // 'PMUD'
+pub const RDMP_HEADER64_EXPECTED_MARKER: u32 = 0x40;
+pub const RDMP_HEADER64_EXPECTED_SIGNATURE: u32 = 0x50_4D_44_52; // 'PMDR'
+pub const RDMP_HEADER64_EXPECTED_VALID_DUMP: u32 = 0x50_4D_55_44; // 'PMUD'
 
 #[repr(C)]
 #[derive(Debug, Default)]
@@ -430,12 +451,16 @@ pub struct RdmpHeader64 {
     reserved1: u32,
     pub metadata_size: u64,
     pub first_page_offset: u64,
-    // Bitmap follows
 }
 
 impl RdmpHeader64 {
     #[must_use]
     pub fn looks_good(&self) -> bool {
+        // Metadata is made out of:
+        // - a [`PhysmemDesc`]
+        // - an array of [`PfnRange`]s (at least one).
+        // Note that the [`RdmpHeader64`] itself is not part of the metadata.
+        const MIN_METADATA_LEN: u64 = (size_of::<PhysmemDesc>() + size_of::<PfnRange>()) as u64;
         if self.marker != RDMP_HEADER64_EXPECTED_MARKER {
             return false;
         }
@@ -448,13 +473,55 @@ impl RdmpHeader64 {
             return false;
         }
 
-        if self.metadata_size - 0x20 != self.first_page_offset - 0x20_40 {
+        if self.metadata_size < MIN_METADATA_LEN {
             return false;
         }
 
-        true
+        // To make this a bit clearer, here is a picture of the layout:
+        //
+        // ```text
+        // File offset
+        //              +---------------------------------------------+
+        // 0x0000       | Header64 (0x2000 bytes)                     |
+        //              |                                             |
+        //              |                                             |
+        //              +---------------------------------------------+
+        // 0x2000       | RdmpHeader64 (0x20 bytes)                   |
+        //              |   marker / signatures / reserved            |
+        //              |   metadata_size          (u64)              |
+        //              |   first_page_offset      (u64)              |
+        //              +---------------------------------------------+--+
+        // 0x2020       | PhysmemDesc (0x10 bytes)                    |  |
+        //              |   number_of_ranges       (u32)              |  |
+        //              |   padding1               (u32)              |  |
+        //              |   number_of_pages        (u64)              |  |
+        //              +---------------------------------------------+  |
+        // 0x2030       | PfnRange[0] (0x10 bytes)                    |  |
+        //              |   base PFN               (u64)              |  |
+        //              |   number_of_pages        (u64)              |  |
+        //              +---------------------------------------------+  | metadata_size
+        //              | PfnRange[1]                                 |  |
+        //              |   ...                                       |  |
+        //              +---------------------------------------------+  |
+        //              | ...                                         |  |
+        //              +---------------------------------------------+  |
+        //              | PfnRange[N - 1]                             |  |
+        //              |                                             |  |
+        //              +---------------------------------------------+--+
+        // first_page_  | Physical page data                          |
+        // offset       |   Pages packed consecutively, in range      |
+        //              |   order; each physical page is 0x1000 bytes |
+        //              +---------------------------------------------+
+        // ```
+        // Metadata begins after [`Header64`] and this header
+        // ([`RdmpHeader64`]).
+        let metadata_offset = (size_of::<Header64>() + size_of::<Self>()) as u64;
+
+        metadata_offset.checked_add(self.metadata_size) == Some(self.first_page_offset)
     }
 }
+
+unsafe impl Pod for RdmpHeader64 {}
 
 #[repr(C)]
 #[derive(Debug, Default)]
@@ -462,7 +529,7 @@ pub struct KernelRdmpHeader64 {
     pub hdr: RdmpHeader64,
     unknown1: u64,
     unknown2: u64,
-    // Bitmap follows
+    // [`PfnRange`] array follows.
 }
 
 unsafe impl Pod for KernelRdmpHeader64 {}
@@ -475,7 +542,7 @@ pub struct FullRdmpHeader64 {
     reserved1: u16,
     reserved2: u16,
     pub total_number_of_pages: u64,
-    // Bitmap follows
+    // [`PfnRange`] array follows.
 }
 
 unsafe impl Pod for FullRdmpHeader64 {}
@@ -488,6 +555,43 @@ pub struct PfnRange {
 }
 
 unsafe impl Pod for PfnRange {}
+
+// XXX: The methods below are copies of [`PhysmemRun`]; could be good to merge
+// the types maybe? Or common trait?
+impl PfnRange {
+    /// Calculate a physical address from a page index.
+    ///
+    /// The formulae is: (`page_file_number` + `page_idx`) *
+    /// `PageKind::Normal.size()`.
+    pub fn page_phys_addr(&self, page_idx: u64) -> Option<Gpa> {
+        if page_idx >= self.number_of_pages {
+            return None;
+        }
+
+        self.page_file_number
+            .checked_add(page_idx)?
+            .checked_mul(PageKind::Normal.len())
+            .map(Gpa::new)
+    }
+
+    /// The GPA of the first page described by this run.
+    #[must_use]
+    pub fn first_page_phys_addr(&self) -> Option<Gpa> {
+        self.page_phys_addr(0)
+    }
+
+    /// The GPA of the last page described by this run.
+    #[must_use]
+    pub fn last_page_phys_addr(&self) -> Option<Gpa> {
+        self.page_phys_addr(self.number_of_pages.checked_sub(1)?)
+    }
+
+    // Total length in bytes of the run.
+    #[must_use]
+    pub fn total_len(&self) -> Option<u64> {
+        self.number_of_pages.checked_mul(PageKind::Normal.len())
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Default)]

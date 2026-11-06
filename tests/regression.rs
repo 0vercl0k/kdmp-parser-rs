@@ -1,15 +1,21 @@
 // Axel '0vercl0k' Souchet - March 17 2024
 use std::collections::HashSet;
-use std::env;
 use std::fs::File;
+use std::io::{Cursor, Read, SeekFrom};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use std::{env, fs};
 
 use kdmp_parser::error::{Error, PageReadError, PxeKind};
 use kdmp_parser::gxa::{Gpa, Gva};
 use kdmp_parser::parse::KernelDumpParser;
-use kdmp_parser::structs::{DumpType, PageKind};
+use kdmp_parser::structs::{
+    BMPHEADER64_EXPECTED_SIGNATURE, BMPHEADER64_EXPECTED_VALID_DUMP, BmpHeader64, DumpType,
+    Header64, KernelRdmpHeader64, PageKind, PfnRange, PhysmemDesc, PhysmemRun, Pod,
+    RDMP_HEADER64_EXPECTED_MARKER, RDMP_HEADER64_EXPECTED_SIGNATURE,
+    RDMP_HEADER64_EXPECTED_VALID_DUMP, RdmpHeader64,
+};
 use kdmp_parser::{phys, virt};
 use serde::Deserialize;
 
@@ -423,7 +429,7 @@ fn regressions() {
         let phys_reader = phys::Reader::new(&parser);
         eprintln!("{parser:?}");
         assert_eq!(parser.dump_type(), test.dump_type);
-        assert_eq!(parser.physmem().len(), usize::try_from(test.size).unwrap());
+        assert_eq!(parser.gpas().len(), usize::try_from(test.size).unwrap());
         let mut buf = [0; 16];
         phys_reader
             .read_exact(Gpa::new(test.phys_addr), &mut buf)
@@ -841,4 +847,241 @@ fn partial_phys() {
         phys_reader.read_exact(0x01_5f_f0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
         Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: None, gpa }, .. }) if gpa == 0x01_5f_f0.into()
     ));
+}
+
+fn pod_mut<T: Pod>(bytes: &mut [u8]) -> Option<&mut T> {
+    if bytes.len() < size_of::<T>() {
+        return None;
+    }
+
+    let ptr = bytes.as_mut_ptr().cast::<T>();
+
+    if !ptr.is_aligned() {
+        return None;
+    }
+
+    Some(unsafe { &mut *ptr })
+}
+
+/// Builds a dump from the [`Header64`] of a real dump, but change the dump type
+/// and add a tail to that.
+fn synthetic_dump(dump_type: DumpType, patch: impl Fn(&mut [u8]), tail: &[u8]) -> Vec<u8> {
+    let mut f = File::open(BMP_PATH.as_path()).unwrap();
+    let mut data = vec![0; size_of::<Header64>()];
+    f.read_exact(&mut data).unwrap();
+
+    pod_mut::<Header64>(&mut data).unwrap().dump_type = dump_type as u32;
+    patch(&mut data);
+    data.extend_from_slice(tail);
+
+    data
+}
+
+/// Builds a one-range RDMP dump declaring `pages`, with one backed page
+/// (PFN:0x1'000).
+fn synthetic_rdmp_dump(dump_type: DumpType, pages: u64) -> Vec<u8> {
+    #[repr(C)]
+    struct Synthetic {
+        hdr: RdmpHeader64,
+        desc: PhysmemDesc,
+        range: PfnRange,
+    }
+
+    unsafe impl Pod for Synthetic {}
+
+    let mut data = vec![0u8; size_of::<Synthetic>()];
+    let d = pod_mut::<Synthetic>(&mut data).unwrap();
+    d.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
+    d.hdr.signature = RDMP_HEADER64_EXPECTED_SIGNATURE;
+    d.hdr.valid_dump = RDMP_HEADER64_EXPECTED_VALID_DUMP;
+    d.hdr.metadata_size = (size_of::<PhysmemDesc>() + size_of::<PfnRange>()) as u64;
+    d.hdr.first_page_offset = (size_of::<Header64>() + size_of::<Synthetic>()) as u64;
+    d.desc.number_of_runs = 1;
+    d.desc.number_of_pages = pages;
+    d.range.page_file_number = 1;
+    d.range.number_of_pages = pages;
+
+    // A single physical page (full of 0x41s) backing PFN:0x1'000.
+    data.extend_from_slice(&[0x41; 0x1_000]);
+    synthetic_dump(dump_type, |_| {}, &data)
+}
+
+#[test]
+fn rdmp_range_table_does_not_include_page_data() {
+    for dump_type in [
+        DumpType::KernelMemory,
+        DumpType::KernelAndUserMemory,
+        DumpType::CompleteMemory,
+    ] {
+        let parser =
+            KernelDumpParser::with_reader(Cursor::new(synthetic_rdmp_dump(dump_type, 1))).unwrap();
+        assert_eq!(parser.gpas().collect::<Vec<_>>(), [Gpa::new(0x1_000)]);
+
+        let mut buffer = [0; 0x1_000];
+        phys::Reader::new(&parser)
+            .read_exact(Gpa::new(0x1_000), &mut buffer)
+            .unwrap();
+        assert_eq!(buffer, [0x41; 0x1_000]);
+    }
+}
+
+#[test]
+fn rdmp_range_table_bounds_are_checked() {
+    let mut truncated = synthetic_rdmp_dump(DumpType::KernelMemory, 1);
+    truncated.truncate(
+        size_of::<Header64>() + size_of::<KernelRdmpHeader64>() + size_of::<PfnRange>() - 1,
+    );
+
+    let mut unaligned = synthetic_rdmp_dump(DumpType::KernelMemory, 1);
+    let h = pod_mut::<RdmpHeader64>(&mut unaligned[size_of::<Header64>()..]).unwrap();
+    h.metadata_size += 1;
+    h.first_page_offset += 1;
+
+    for (data, expected) in [
+        (
+            truncated,
+            "PFN range table extends past the end of the file",
+        ),
+        (
+            unaligned,
+            "PFN range table size is not a multiple of sizeof::<PfnRange>()",
+        ),
+    ] {
+        let res = KernelDumpParser::with_reader(Cursor::new(data));
+        assert!(
+            matches!(res, Err(Error::InvalidData(e)) if e == expected),
+            "expected {expected:?}, got {res:?}"
+        );
+    }
+}
+
+#[test]
+fn header_counts_checked_against_file_length() {
+    let bmp_header = |pages: u64, first_page: u64| {
+        let mut data = vec![0; size_of::<BmpHeader64>()];
+        let h = pod_mut::<BmpHeader64>(&mut data).unwrap();
+        h.signature = BMPHEADER64_EXPECTED_SIGNATURE;
+        h.valid_dump = BMPHEADER64_EXPECTED_VALID_DUMP;
+        h.first_page = first_page;
+        h.total_present_pages = pages;
+        h.pages = pages;
+
+        data
+    };
+
+    let cases = [
+        // Full dump whose single run declares 2^36 pages.
+        (
+            synthetic_dump(
+                DumpType::Full,
+                |d| {
+                    #[repr(C)]
+                    struct Synthetic {
+                        desc: PhysmemDesc,
+                        run: PhysmemRun,
+                    }
+
+                    unsafe impl Pod for Synthetic {}
+
+                    let h = pod_mut::<Header64>(d).unwrap();
+                    let p = pod_mut::<Synthetic>(&mut h.physical_memory_block_buffer).unwrap();
+                    p.desc.number_of_runs = 1;
+                    p.desc.number_of_pages = 1 << 36;
+                    p.run.base_page = 0;
+                    p.run.page_count = 1 << 36;
+                },
+                &[0; 0x1_000],
+            ),
+            "run doesn't fit",
+        ),
+        // Bitmap dump marking 8M pages present with no page data behind it.
+        (
+            synthetic_dump(
+                DumpType::Bmp,
+                |_| {},
+                &[bmp_header(8 << 20, 0x2_038 + (1 << 20)), vec![
+                    0xff;
+                    1 << 20
+                ]]
+                .concat(),
+            ),
+            "bitmap doesn't fit",
+        ),
+        // Bitmap dump declaring 2^40 pages in a short file.
+        (
+            synthetic_dump(
+                DumpType::Bmp,
+                |_| {},
+                &[bmp_header(1 << 40, 0x3_000), vec![0xff; 0x1_000]].concat(),
+            ),
+            "bitmap extends past the end of the file",
+        ),
+        // Kernel dump with a range of 2^36 pages (but only one backed page).
+        (
+            synthetic_rdmp_dump(DumpType::KernelMemory, 1 << 36),
+            "run doesn't fit",
+        ),
+    ];
+
+    for (i, (data, expected)) in cases.into_iter().enumerate() {
+        let res = KernelDumpParser::with_reader(Cursor::new(data.clone()));
+        eprintln!("{res:?}");
+        assert!(
+            matches!(res, Err(Error::InvalidData(e)) if e == expected),
+            "case {i}"
+        );
+    }
+}
+
+#[test]
+fn cyclic_module_list_is_dropped() {
+    // Point the first loaded-module entry at itself so the walk never reaches
+    // the list head again.
+    let data = fs::read(BMP_PATH.as_path()).unwrap();
+    let parser = KernelDumpParser::with_reader(Cursor::new(data.clone())).unwrap();
+    let virt_reader = virt::Reader::new(&parser);
+    let head = Gva::new(parser.headers().ps_loaded_module_list);
+    let first = virt_reader.read_struct::<u64>(head).unwrap();
+    let gpa = virt_reader.translate(Gva::new(first)).unwrap().gpa();
+    let SeekFrom::Start(offset) = phys::Reader::new(&parser).translate(gpa).unwrap() else {
+        unreachable!()
+    };
+    let offset = usize::try_from(offset).unwrap();
+    let mut bad = data;
+    bad[offset..offset + 8].copy_from_slice(&first.to_le_bytes());
+
+    // The parse succeeds and the module list is simply absent.
+    let parser = KernelDumpParser::with_reader(Cursor::new(bad)).unwrap();
+    assert_eq!(parser.kernel_modules().len(), 0);
+}
+
+#[test]
+fn small_rdmp_sizes_do_not_underflow() {
+    // Invalid sizes must fail header validation, not a later parser check.
+    // The final case would wrap to metadata_offset - 1 with unchecked addition.
+    let metadata_offset = (size_of::<Header64>() + size_of::<RdmpHeader64>()) as u64;
+    for (metadata_size, first_page_offset) in [
+        (0x20 - 1, 0x20_40),
+        (0x20, 0x20_40 - 1),
+        (0x20 - 1, 0x20_40 - 1),
+        (u64::MAX, metadata_offset - 1),
+    ] {
+        let mut data = vec![0; size_of::<KernelRdmpHeader64>()];
+        let h = pod_mut::<KernelRdmpHeader64>(&mut data).unwrap();
+        h.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
+        h.hdr.signature = RDMP_HEADER64_EXPECTED_SIGNATURE;
+        h.hdr.valid_dump = RDMP_HEADER64_EXPECTED_VALID_DUMP;
+        h.hdr.metadata_size = metadata_size;
+        h.hdr.first_page_offset = first_page_offset;
+        let data = synthetic_dump(DumpType::KernelMemory, |_| {}, &data);
+        let res = KernelDumpParser::with_reader(Cursor::new(data));
+
+        assert!(
+            matches!(
+                res,
+                Err(Error::InvalidData("RdmpHeader64 doesn't look right"))
+            ),
+            "metadata_size={metadata_size:#x}, first_page_offset={first_page_offset:#x}: {res:?}"
+        );
+    }
 }

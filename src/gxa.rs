@@ -50,7 +50,7 @@ pub trait Gxa: Sized + Default + Copy + From<u64> {
         Self::from(
             self.page_align()
                 .u64()
-                .checked_add(PageKind::Normal.size())
+                .checked_add(PageKind::Normal.len())
                 .expect("Cannot overflow"),
         )
     }
@@ -124,6 +124,8 @@ impl Gpa {
     /// ```
     #[must_use]
     pub const fn from_pfn_with_offset(pfn: Pfn, offset: u64) -> Self {
+        // XXX: We can't use `.u64()` here because `Gxa` trait is non const
+        // because const trait aren't stable.
         let base = pfn.u64() << (4 * 3);
 
         Self(base + offset)
@@ -137,12 +139,12 @@ impl Gpa {
     /// # use kdmp_parser::gxa::{Gxa, Gpa};
     /// # fn main() {
     /// let gpa = Gpa::new(0x1337_337);
-    /// assert_eq!(gpa.pfn(), 0x1337);
+    /// assert_eq!(gpa.pfn().u64(), 0x1337);
     /// # }
     /// ```
     #[must_use]
-    pub const fn pfn(&self) -> u64 {
-        self.0 >> (4 * 3)
+    pub const fn pfn(&self) -> Pfn {
+        Pfn::new(self.0 >> (4 * 3))
     }
 }
 
