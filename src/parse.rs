@@ -19,8 +19,8 @@ use crate::physindex::{Builder, PhysIndex};
 use crate::pxe::Pfn;
 use crate::structs::{
     BmpHeader64, Context, DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
-    DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, KdDebuggerData64, KernelRdmpHeader64,
-    PageKind, PfnRange, PhysmemDesc, PhysmemRun, Pod,
+    DumpType, ExceptionRecord64, Header64, KdDebuggerData64, KernelRdmpHeader64, PageKind,
+    PfnRange, PhysmemDesc, PhysmemRun, Pod,
 };
 use crate::virt;
 use crate::virt_utils::{
@@ -386,43 +386,22 @@ impl KernelDumpParser {
 
     /// Build the physical memory index for [`DumpType::KernelMemory`] /
     /// [`DumpType::KernelAndUserMemory`] and [`DumpType::CompleteMemory`] dump.
-    fn kernel_physidx(dump_type: DumpType, reader: &mut impl Reader) -> Result<PhysIndex> {
-        use DumpType as D;
-        let mut page_count = 0u64;
-        let (mut page_offset, metadata_size, total_number_of_pages) = match dump_type {
-            D::KernelMemory | D::KernelAndUserMemory => {
-                let kernel_hdr = read_struct::<KernelRdmpHeader64>(reader)?;
-                if !kernel_hdr.hdr.looks_good() {
-                    return Err(Error::InvalidData("RdmpHeader64 doesn't look right"));
-                }
+    fn kernel_physidx(reader: &mut impl Reader) -> Result<PhysIndex> {
+        let krdmp = read_struct::<KernelRdmpHeader64>(reader)?;
+        if !krdmp.hdr.looks_good() {
+            return Err(Error::InvalidData("RdmpHeader64 doesn't look right"));
+        }
 
-                (
-                    kernel_hdr.hdr.first_page_offset,
-                    kernel_hdr.hdr.metadata_size,
-                    0,
-                )
-            }
-            D::CompleteMemory => {
-                let full_hdr = read_struct::<FullRdmpHeader64>(reader)?;
-                if !full_hdr.hdr.looks_good() {
-                    return Err(Error::InvalidData("FullRdmpHeader64 doesn't look right"));
-                }
-
-                (
-                    full_hdr.hdr.first_page_offset,
-                    full_hdr.hdr.metadata_size,
-                    full_hdr.total_number_of_pages,
-                )
-            }
-            _ => unreachable!(),
-        };
+        let mut page_offset = krdmp.hdr.first_page_offset;
+        let metadata_size = krdmp.hdr.metadata_size;
+        let total_number_of_pages = krdmp.phys_desc.number_of_pages;
 
         if page_offset == 0 || metadata_size == 0 {
             return Err(Error::InvalidData("no first page or metadata size"));
         }
 
         // `metadata_size` includes the [`PhysmemDesc`] already consumed
-        // as part of reading [`KernelRdmpHeader64`] / [`FullRdmpHeader64`].
+        // as part of reading [`KernelRdmpHeader64`].
         // Only the bytes between the current position and the first
         // page contain [`PfnRange`]s.
         let pfn_ranges_len = page_offset
@@ -442,34 +421,32 @@ impl KernelDumpParser {
             ));
         }
 
-        let number_pfns = pfn_ranges_len / pfn_range_size;
+        let calculated_number_pfns = pfn_ranges_len / pfn_range_size;
+        let number_of_runs = krdmp.phys_desc.number_of_runs;
+        if calculated_number_pfns != u64::from(number_of_runs) {
+            return Err(Error::InvalidData("PFN range count != number_of_runs"));
+        }
+
         let mut physmem = Builder::new();
-
-        for _ in 0..number_pfns {
-            if dump_type == D::CompleteMemory {
-                // `CompleteMemoryDump` type seems to be bound by the
-                // `total_number_of_pages` field, *not* by `metadata_size`.
-                if page_count == total_number_of_pages {
-                    break;
-                }
-
-                if page_count > total_number_of_pages {
-                    return Err(Error::InvalidData("page_count > total_number_of_pages"));
-                }
-            }
-
+        let mut page_count = 0u64;
+        for _ in 0..calculated_number_pfns {
+            // The bounded table and descriptor count delimit the ranges, not
+            // a zero PFN or an early match of the declared page total.
             let pfn_range = read_struct::<PfnRange>(reader)?;
-            if pfn_range.page_file_number == 0 {
-                break;
-            }
-
             let Some(number_of_pages) = NonZeroU64::new(pfn_range.number_of_pages) else {
                 return Err(Error::InvalidData("zero number_of_pages"));
             };
 
+            page_count = page_count
+                .checked_add(pfn_range.number_of_pages)
+                .ok_or(Error::InvalidData("overflow w/ page_count"))?;
+            if page_count > total_number_of_pages {
+                return Err(Error::InvalidData("page_count > total_number_of_pages"));
+            }
+
             // Guard against `number_of_pages` that would extend past the file.
             if !check_pages_fit(page_offset, number_of_pages, reader_len) {
-                return Err(Error::InvalidData("run doesn't fit"));
+                return Err(Error::InvalidData("pfn range doesn't fit"));
             }
 
             // Calculate the physical address of the first page..
@@ -489,10 +466,10 @@ impl KernelDumpParser {
             page_offset += pfn_range
                 .total_len()
                 .ok_or(Error::InvalidData("overflow w/ page offset"))?;
+        }
 
-            page_count = page_count
-                .checked_add(pfn_range.number_of_pages)
-                .ok_or(Error::InvalidData("overflow w/ page_count"))?;
+        if page_count != total_number_of_pages {
+            return Err(Error::InvalidData("page_count != total_number_of_pages"));
         }
 
         physmem.finish()
@@ -508,7 +485,7 @@ impl KernelDumpParser {
             D::Full => Self::full_physindex(headers, reader),
             D::Bmp | D::LiveKernelMemory => Self::bmp_physindex(reader),
             D::KernelMemory | D::KernelAndUserMemory | D::CompleteMemory => {
-                Self::kernel_physidx(dump_type, reader)
+                Self::kernel_physidx(reader)
             }
         }
     }

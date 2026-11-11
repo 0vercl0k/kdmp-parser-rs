@@ -1019,7 +1019,7 @@ fn header_counts_checked_against_file_length() {
         // Kernel dump with a range of 2^36 pages (but only one backed page).
         (
             synthetic_rdmp_dump(DumpType::KernelMemory, 1 << 36),
-            "run doesn't fit",
+            "pfn range doesn't fit",
         ),
     ];
 
