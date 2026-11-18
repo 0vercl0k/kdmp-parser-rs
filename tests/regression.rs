@@ -900,7 +900,8 @@ fn synthetic_rdmp_dump_with_ranges(
     const KRDMP_HEADER_LEN: usize = size_of::<KernelRdmpHeader64>();
     const PFN_RANGE_LEN: usize = size_of::<PfnRange>();
     let mut krdmp_data = vec![0u8; KRDMP_HEADER_LEN + size_of_val(ranges)];
-    // The first page of data is after the header, the kernel rdmp header & the pfn ranges that follow. 
+    // The first page of data is after the header, the kernel rdmp header & the
+    // pfn ranges that follow.
     let first_page_offset = (size_of::<Header64>() + krdmp_data.len()) as u64;
     let krdmp = pod_mut::<KernelRdmpHeader64>(&mut krdmp_data).unwrap();
     krdmp.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
@@ -911,12 +912,10 @@ fn synthetic_rdmp_dump_with_ranges(
     krdmp.phys_desc.number_of_runs = u32::try_from(ranges.len()).unwrap();
     krdmp.phys_desc.number_of_pages = ranges.iter().map(|r| r.number_of_pages).sum();
     // Write the pfn ranges.
-    let (pfn_ranges_bytes, remainder) = krdmp_data[KRDMP_HEADER_LEN..]
-        .as_chunks_mut::<PFN_RANGE_LEN>();
+    let (pfn_ranges_bytes, remainder) =
+        krdmp_data[KRDMP_HEADER_LEN..].as_chunks_mut::<PFN_RANGE_LEN>();
     assert_eq!(remainder, [0u8; 0]);
-    for (pfn_range_bytes, range) in pfn_ranges_bytes.iter_mut()
-        .zip(ranges)
-    {
+    for (pfn_range_bytes, range) in pfn_ranges_bytes.iter_mut().zip(ranges) {
         let pfn_range = pod_mut::<PfnRange>(pfn_range_bytes).unwrap();
         pfn_range.page_file_number = range.page_file_number;
         pfn_range.number_of_pages = range.number_of_pages;
