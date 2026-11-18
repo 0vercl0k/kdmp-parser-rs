@@ -877,33 +877,53 @@ fn synthetic_dump(dump_type: DumpType, patch: impl Fn(&mut [u8]), tail: &[u8]) -
     data
 }
 
-/// Builds a one-range RDMP dump declaring `pages`, with one backed page
-/// (PFN:0x1'000).
+/// Builds a one-range RDMP dump declaring `pages`, with one backed page at
+/// `PFN:0x1_000`.
 fn synthetic_rdmp_dump(dump_type: DumpType, pages: u64) -> Vec<u8> {
-    #[repr(C)]
-    struct Synthetic {
-        hdr: RdmpHeader64,
-        desc: PhysmemDesc,
-        range: PfnRange,
+    synthetic_rdmp_dump_with_ranges(
+        dump_type,
+        &[PfnRange {
+            page_file_number: 1,
+            number_of_pages: pages,
+        }],
+        1,
+    )
+}
+
+/// Builds an RDMP dump with explicit [`PfnRange`]s and `backed_pages` pages of
+/// data.
+fn synthetic_rdmp_dump_with_ranges(
+    dump_type: DumpType,
+    ranges: &[PfnRange],
+    backed_pages: usize,
+) -> Vec<u8> {
+    const KRDMP_HEADER_LEN: usize = size_of::<KernelRdmpHeader64>();
+    const PFN_RANGE_LEN: usize = size_of::<PfnRange>();
+    let mut krdmp_data = vec![0u8; KRDMP_HEADER_LEN + size_of_val(ranges)];
+    // The first page of data is after the header, the kernel rdmp header & the
+    // pfn ranges that follow.
+    let first_page_offset = (size_of::<Header64>() + krdmp_data.len()) as u64;
+    let krdmp = pod_mut::<KernelRdmpHeader64>(&mut krdmp_data).unwrap();
+    krdmp.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
+    krdmp.hdr.signature = RDMP_HEADER64_EXPECTED_SIGNATURE;
+    krdmp.hdr.valid_dump = RDMP_HEADER64_EXPECTED_VALID_DUMP;
+    krdmp.hdr.metadata_size = (size_of::<PhysmemDesc>() + size_of_val(ranges)) as u64;
+    krdmp.hdr.first_page_offset = first_page_offset;
+    krdmp.phys_desc.number_of_runs = u32::try_from(ranges.len()).unwrap();
+    krdmp.phys_desc.number_of_pages = ranges.iter().map(|r| r.number_of_pages).sum();
+    // Write the pfn ranges.
+    let (pfn_ranges_bytes, remainder) =
+        krdmp_data[KRDMP_HEADER_LEN..].as_chunks_mut::<PFN_RANGE_LEN>();
+    assert_eq!(remainder, [0u8; 0]);
+    for (pfn_range_bytes, range) in pfn_ranges_bytes.iter_mut().zip(ranges) {
+        let pfn_range = pod_mut::<PfnRange>(pfn_range_bytes).unwrap();
+        pfn_range.page_file_number = range.page_file_number;
+        pfn_range.number_of_pages = range.number_of_pages;
     }
 
-    unsafe impl Pod for Synthetic {}
-
-    let mut data = vec![0u8; size_of::<Synthetic>()];
-    let d = pod_mut::<Synthetic>(&mut data).unwrap();
-    d.hdr.marker = RDMP_HEADER64_EXPECTED_MARKER;
-    d.hdr.signature = RDMP_HEADER64_EXPECTED_SIGNATURE;
-    d.hdr.valid_dump = RDMP_HEADER64_EXPECTED_VALID_DUMP;
-    d.hdr.metadata_size = (size_of::<PhysmemDesc>() + size_of::<PfnRange>()) as u64;
-    d.hdr.first_page_offset = (size_of::<Header64>() + size_of::<Synthetic>()) as u64;
-    d.desc.number_of_runs = 1;
-    d.desc.number_of_pages = pages;
-    d.range.page_file_number = 1;
-    d.range.number_of_pages = pages;
-
-    // A single physical page (full of 0x41s) backing PFN:0x1'000.
-    data.extend_from_slice(&[0x41; 0x1_000]);
-    synthetic_dump(dump_type, |_| {}, &data)
+    // Materialize the backing pages now, at the end of the `krdmp_data`.
+    krdmp_data.resize(krdmp_data.len() + backed_pages * 0x1_000, 0x41);
+    synthetic_dump(dump_type, |_| {}, &krdmp_data)
 }
 
 #[test]
@@ -922,6 +942,110 @@ fn rdmp_range_table_does_not_include_page_data() {
             .read_exact(Gpa::new(0x1_000), &mut buffer)
             .unwrap();
         assert_eq!(buffer, [0x41; 0x1_000]);
+    }
+}
+
+#[test]
+fn rdmp_descriptor_page_counts_are_checked() {
+    for dump_type in [
+        DumpType::KernelMemory,
+        DumpType::KernelAndUserMemory,
+        DumpType::CompleteMemory,
+    ] {
+        let one_page = synthetic_rdmp_dump(dump_type, 1);
+        let two_pages = synthetic_rdmp_dump_with_ranges(
+            dump_type,
+            &[PfnRange {
+                page_file_number: 1,
+                number_of_pages: 2,
+            }],
+            2,
+        );
+        let two_ranges = synthetic_rdmp_dump_with_ranges(
+            dump_type,
+            &[
+                PfnRange {
+                    page_file_number: 1,
+                    number_of_pages: 1,
+                },
+                PfnRange {
+                    page_file_number: 3,
+                    number_of_pages: 1,
+                },
+            ],
+            2,
+        );
+
+        for (mut data, declared_pages, expected) in [
+            // A zero total must not cause a successful early exit.
+            (one_page.clone(), 0, "page_count > total_number_of_pages"),
+            // The last (and only) range exceeds the total.
+            (two_pages, 1, "page_count > total_number_of_pages"),
+            // The ranges describe fewer pages than the descriptor promises.
+            (one_page, 2, "page_count != total_number_of_pages"),
+            // Matching the total after one range must not hide another range.
+            (two_ranges, 1, "page_count > total_number_of_pages"),
+        ] {
+            let h = pod_mut::<KernelRdmpHeader64>(&mut data[size_of::<Header64>()..]).unwrap();
+            h.phys_desc.number_of_pages = declared_pages;
+            let res = KernelDumpParser::with_reader(Cursor::new(data));
+            assert!(
+                matches!(res, Err(Error::InvalidData(e)) if e == expected),
+                "{dump_type:?}, declared pages={declared_pages}: {res:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rdmp_descriptor_range_counts_are_checked() {
+    for dump_type in [
+        DumpType::KernelMemory,
+        DumpType::KernelAndUserMemory,
+        DumpType::CompleteMemory,
+    ] {
+        for declared_runs in [0, 2, u32::MAX] {
+            let mut data = synthetic_rdmp_dump(dump_type, 1);
+            let h = pod_mut::<KernelRdmpHeader64>(&mut data[size_of::<Header64>()..]).unwrap();
+            h.phys_desc.number_of_runs = declared_runs;
+            let res = KernelDumpParser::with_reader(Cursor::new(data));
+            assert!(
+                matches!(
+                    res,
+                    Err(Error::InvalidData("PFN range count != number_of_runs"))
+                ),
+                "{dump_type:?}, declared runs={declared_runs}: {res:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rdmp_descriptor_counts_include_zero_pfn() {
+    for dump_type in [
+        DumpType::KernelMemory,
+        DumpType::KernelAndUserMemory,
+        DumpType::CompleteMemory,
+    ] {
+        let data = synthetic_rdmp_dump_with_ranges(
+            dump_type,
+            &[
+                PfnRange {
+                    page_file_number: 0,
+                    number_of_pages: 1,
+                },
+                PfnRange {
+                    page_file_number: 2,
+                    number_of_pages: 1,
+                },
+            ],
+            2,
+        );
+        let parser = KernelDumpParser::with_reader(Cursor::new(data)).unwrap();
+        assert_eq!(parser.gpas().collect::<Vec<_>>(), [
+            Gpa::new(0),
+            Gpa::new(0x2_000)
+        ]);
     }
 }
 
@@ -1019,7 +1143,7 @@ fn header_counts_checked_against_file_length() {
         // Kernel dump with a range of 2^36 pages (but only one backed page).
         (
             synthetic_rdmp_dump(DumpType::KernelMemory, 1 << 36),
-            "run doesn't fit",
+            "pfn range doesn't fit",
         ),
     ];
 
