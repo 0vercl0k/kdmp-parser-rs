@@ -68,7 +68,7 @@ fn read_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
 /// A kernel dump parser that gives access to the physical memory space stored
 /// in the dump. It also offers virtual to physical memory translation as well
 /// as a virtual read facility.
-pub struct KernelDumpParser {
+pub struct KernelDumpParser<'reader> {
     /// Which type of dump is it?
     dump_type: DumpType,
     /// Context header.
@@ -79,7 +79,7 @@ pub struct KernelDumpParser {
     pub(crate) physidx: PhysIndex,
     /// The [`Reader`] object that allows us to seek / read the dump file which
     /// could be memory mapped, read from a file, etc.
-    reader: RefCell<Box<dyn Reader>>,
+    reader: RefCell<Box<dyn Reader + 'reader>>,
     /// The driver modules loaded when the crash-dump was taken. Extracted from
     /// the nt!PsLoadedModuleList.
     kernel_modules: ModuleMap,
@@ -88,7 +88,7 @@ pub struct KernelDumpParser {
     user_modules: ModuleMap,
 }
 
-impl Debug for KernelDumpParser {
+impl Debug for KernelDumpParser<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KernelDumpParser")
             .field("dump_type", &self.dump_type)
@@ -96,9 +96,9 @@ impl Debug for KernelDumpParser {
     }
 }
 
-impl KernelDumpParser {
+impl<'reader> KernelDumpParser<'reader> {
     /// Create an instance from a [`Reader`] & parse the file.
-    pub fn with_reader(mut reader: impl Reader + 'static) -> Result<Self> {
+    pub fn with_reader(mut reader: impl Reader + 'reader) -> Result<Self> {
         // Parse the dump header and check if things look right.
         let headers = Box::new(read_struct::<Header64>(&mut reader)?);
         if headers.signature != DUMP_HEADER64_EXPECTED_SIGNATURE {

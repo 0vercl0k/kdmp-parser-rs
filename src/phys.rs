@@ -11,12 +11,12 @@ use crate::parse::KernelDumpParser;
 use crate::structs::PageKind;
 
 /// A reader lets you translate & read physical memory from a dump file.
-pub struct Reader<'parser> {
-    parser: &'parser KernelDumpParser,
+pub struct Reader<'parser, 'reader> {
+    parser: &'parser KernelDumpParser<'reader>,
 }
 
-impl<'parser> Reader<'parser> {
-    pub fn new(parser: &'parser KernelDumpParser) -> Self {
+impl<'parser, 'reader> Reader<'parser, 'reader> {
+    pub fn new(parser: &'parser KernelDumpParser<'reader>) -> Self {
         Self { parser }
     }
 

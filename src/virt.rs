@@ -87,17 +87,17 @@ pub(crate) fn ignore_non_fatal<T>(r: Result<T>) -> Result<Option<T>> {
 }
 
 /// A reader lets you translate & read virtual memory from a dump file.
-pub struct Reader<'parser> {
-    parser: &'parser KernelDumpParser,
+pub struct Reader<'parser, 'reader> {
+    parser: &'parser KernelDumpParser<'reader>,
     dtb: Gpa,
 }
 
-impl<'parser> Reader<'parser> {
-    pub fn new(parser: &'parser KernelDumpParser) -> Self {
+impl<'parser, 'reader> Reader<'parser, 'reader> {
+    pub fn new(parser: &'parser KernelDumpParser<'reader>) -> Self {
         Self::with_dtb(parser, Gpa::new(parser.headers().directory_table_base))
     }
 
-    pub fn with_dtb(parser: &'parser KernelDumpParser, dtb: Gpa) -> Self {
+    pub fn with_dtb(parser: &'parser KernelDumpParser<'reader>, dtb: Gpa) -> Self {
         Self { parser, dtb }
     }
 

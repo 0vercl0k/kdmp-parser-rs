@@ -138,6 +138,7 @@ fn regressions() {
         .into_iter()
         .map(Into::into)
         .collect::<Vec<Module>>();
+    // ```text
     // kd> r
     // rax=0000000000000003 rbx=fffff8050f4e9f70 rcx=0000000000000001
     // rdx=fffff805135684d0 rsi=0000000000000100 rdi=fffff8050f4e9f80
@@ -147,6 +148,7 @@ fn regressions() {
     // r14=0000000000000000 r15=0000000000000052
     // iopl=0         nv up ei pl nz na pe nc
     // cs=0010  ss=0018  ds=002b  es=002b  fs=0053  gs=002b efl=00040202
+    // ```
     let bmp = TestcaseValues {
         file: BMP_PATH.to_path_buf(),
         dump_type: DumpType::Bmp,
@@ -1148,7 +1150,7 @@ fn header_counts_checked_against_file_length() {
     ];
 
     for (i, (data, expected)) in cases.into_iter().enumerate() {
-        let res = KernelDumpParser::with_reader(Cursor::new(data.clone()));
+        let res = KernelDumpParser::with_reader(Cursor::new(data));
         eprintln!("{res:?}");
         assert!(
             matches!(res, Err(Error::InvalidData(e)) if e == expected),
@@ -1162,7 +1164,7 @@ fn cyclic_module_list_is_dropped() {
     // Point the first loaded-module entry at itself so the walk never reaches
     // the list head again.
     let data = fs::read(BMP_PATH.as_path()).unwrap();
-    let parser = KernelDumpParser::with_reader(Cursor::new(data.clone())).unwrap();
+    let parser = KernelDumpParser::with_reader(Cursor::new(&data)).unwrap();
     let virt_reader = virt::Reader::new(&parser);
     let head = Gva::new(parser.headers().ps_loaded_module_list);
     let first = virt_reader.read_struct::<u64>(head).unwrap();
@@ -1170,6 +1172,7 @@ fn cyclic_module_list_is_dropped() {
     let SeekFrom::Start(offset) = phys::Reader::new(&parser).translate(gpa).unwrap() else {
         unreachable!()
     };
+    drop(parser);
     let offset = usize::try_from(offset).unwrap();
     let mut bad = data;
     bad[offset..offset + 8].copy_from_slice(&first.to_le_bytes());
