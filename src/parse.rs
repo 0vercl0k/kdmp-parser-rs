@@ -363,7 +363,7 @@ impl KernelDumpParser {
             // Walk every bits.
             for bit_idx in 0u64..8 {
                 // If it's not set, go to the next.
-                if byte[0].bit(bit_idx.try_into().unwrap()) == 0 {
+                if byte[0].bit_at(bit_idx.try_into().unwrap()) == 0 {
                     continue;
                 }
 

@@ -10,7 +10,6 @@
 //! assert_eq!(v.bits(0..=63), v);
 //! assert_eq!(v.bits(0..=55), 0xCD_EF_01_23_45_67_89);
 //! ```
-use std::mem;
 use std::ops::RangeInclusive;
 
 /// Utility trait to make it easier to extract ranges of bits.
@@ -21,7 +20,7 @@ pub trait Bits: Sized {
 
     /// Get a bit.
     #[must_use]
-    fn bit(&self, n: usize) -> Self {
+    fn bit_at(&self, n: usize) -> Self {
         self.bits(n..=n)
     }
 }
@@ -33,7 +32,7 @@ where
 {
     fn bits(&self, r: RangeInclusive<usize>) -> Self {
         let (start, end) = r.into_inner();
-        let capacity = mem::size_of_val(self) * 8;
+        let capacity = size_of_val(self) * 8;
         assert!(start <= end, "the range should have a start <= end");
         assert!(
             end < capacity,
@@ -82,7 +81,7 @@ mod tests {
         assert_eq!(v.bits(40..=47), 0xEF);
         assert_eq!(v.bits(48..=55), 0xCD);
         assert_eq!(v.bits(56..=63), 0xAB);
-        assert_eq!(v.bit(0), 1);
+        assert_eq!(v.bit_at(0), 1);
     }
 
     #[test]
