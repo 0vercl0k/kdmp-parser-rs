@@ -81,8 +81,8 @@ impl<'parser, 'reader> Reader<'parser, 'reader> {
             // left.
             total_read += amount_wanted;
             amount_left -= amount_wanted;
-            // We have more work to do, so let's move to the next page.
-            addr = addr.next_aligned_page();
+            addr +=
+                u64::try_from(amount_wanted).map_err(|_| Error::InvalidData("truncation phys"))?;
         }
 
         // Yay, we read as much bytes as the user wanted!
