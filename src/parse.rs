@@ -22,10 +22,10 @@ use crate::structs::{
     DumpType, ExceptionRecord64, Header64, KdDebuggerData64, KernelRdmpHeader64, PageKind,
     PfnRange, PhysmemDesc, PhysmemRun, Pod,
 };
-use crate::virt;
 use crate::virt_utils::{
     ModuleMap, try_extract_kernel_modules, try_extract_user_modules, try_find_prcb,
 };
+use crate::{phys, virt};
 
 /// Calculate the pfn from a bitmap & bit index.
 fn pfn_from_bitmap_idxs(bitmap_idx: u64, bit_idx: u64) -> Option<Pfn> {
@@ -172,6 +172,22 @@ impl<'reader> KernelDumpParser<'reader> {
         let file = File::open(dump_path)?;
 
         Self::with_reader(file)
+    }
+
+    /// Create a virtual memory reader. Shorthand for [`virt::Reader::new`].
+    pub fn virt<'s>(&'s self) -> virt::Reader<'s, 'reader> {
+        virt::Reader::new(self)
+    }
+
+    /// Create a virtual memory reader w/ a dtb. Shorthand for
+    /// [`virt::Reader::with_dtb`].
+    pub fn virt_with_dtb<'s>(&'s self, dtb: Gpa) -> virt::Reader<'s, 'reader> {
+        virt::Reader::with_dtb(self, dtb)
+    }
+
+    /// Create a physical memory reader. Shorthand for [`phys::Reader::new`].
+    pub fn phys<'s>(&'s self) -> phys::Reader<'s, 'reader> {
+        phys::Reader::new(self)
     }
 
     /// Get a list of every GPAs available in this dump.

@@ -16,7 +16,6 @@ use kdmp_parser::structs::{
     RDMP_HEADER64_EXPECTED_MARKER, RDMP_HEADER64_EXPECTED_SIGNATURE,
     RDMP_HEADER64_EXPECTED_VALID_DUMP, RdmpHeader64,
 };
-use kdmp_parser::{phys, virt};
 use serde::Deserialize;
 
 /// Convert an hexadecimal encoded integer string into a `u64`.
@@ -427,8 +426,8 @@ fn regressions() {
 
     for test in tests {
         let parser = KernelDumpParser::new(&test.file).unwrap();
-        let virt_reader = virt::Reader::new(&parser);
-        let phys_reader = phys::Reader::new(&parser);
+        let virt_reader = parser.virt();
+        let phys_reader = parser.phys();
         eprintln!("{parser:?}");
         assert_eq!(parser.dump_type(), test.dump_type);
         assert_eq!(parser.gpas().len(), usize::try_from(test.size).unwrap());
@@ -478,7 +477,7 @@ fn transition_pte() {
     //                                                                                  Protect: 4 - ReadWrite
     // ```
     let parser = KernelDumpParser::new(KERNEL_USER_DUMP_PATH.as_path()).unwrap();
-    let reader = virt::Reader::new(&parser);
+    let reader = parser.virt();
     let mut buffer = [0; 16];
     let expected_buffer = [
         0xe0, 0x07, 0xa3, 0x2e, 0xa4, 0x01, 0x00, 0x00, 0x80, 0xf2, 0xa2, 0x2e, 0xa4, 0x01, 0x00,
@@ -519,7 +518,7 @@ fn valid_pte_no_backing() {
     // Physical memory read at 1bc4000 failed
     // ```
     let parser = KernelDumpParser::new(KERNEL_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = virt::Reader::new(&parser);
+    let virt_reader = parser.virt();
     let mut buffer = [0];
     assert!(matches!(
         virt_reader
@@ -541,7 +540,7 @@ fn valid_pte_no_backing() {
         Ok(None)
     ));
 
-    let phys_reader = phys::Reader::new(&parser);
+    let phys_reader = parser.phys();
     assert!(matches!(
         phys_reader
             .read(Gpa::new(0x166b_7240), &mut buffer)
@@ -602,7 +601,7 @@ fn bug_10() {
     // fffff803`f308700f  ?? ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  ????????????????
     // ```
     let parser = KernelDumpParser::new(KERNEL_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = virt::Reader::new(&parser);
+    let virt_reader = parser.virt();
 
     let mut buffer = [0; 32];
     assert!(matches!(
@@ -638,7 +637,7 @@ fn bug_10() {
     // 0000015c`c6603938  69 00 6d 00 65 00 42 00-72 00 6f 00 6b 00 65 00  i.m.e.B.r.o.k.e.
     // ```
     let parser = KernelDumpParser::new(COMPLETE_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = virt::Reader::with_dtb(&parser, 0x0ea0_0002.into());
+    let virt_reader = parser.virt_with_dtb(0x0ea0_0002.into());
     let mut buffer = [0; 64];
     virt_reader
         .read_exact(0x015c_c660_3908.into(), &mut buffer)
@@ -666,7 +665,7 @@ fn large_page() {
     // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 4800
     // ```
     let parser = KernelDumpParser::new(WOW64_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = virt::Reader::new(&parser);
+    let virt_reader = parser.virt();
     let tr = virt_reader.translate(0xffff_f801_2280_0000.into()).unwrap();
     assert!(matches!(tr.page_kind, PageKind::Large));
     assert!(matches!(tr.pfn.u64(), 0x48_00));
@@ -863,7 +862,7 @@ fn straddle_phys() {
     // kd> !db 2424000+fff l10
     // # 2424fff 01 75 f0 49 8b c0 48 f7-d8 1b c9 f7 d1 81 e1 0d .u.I..H.........
     // ```
-    let virt_reader = virt::Reader::new(&parser);
+    let virt_reader = parser.virt();
     assert!(matches!(
         virt_reader.read(0xffff_f805_106b_4fff.into(), &mut buffer),
         Ok(0x10)
@@ -871,7 +870,7 @@ fn straddle_phys() {
 
     assert_eq!(buffer, expected);
 
-    let phys_reader = phys::Reader::new(&parser);
+    let phys_reader = parser.phys();
     assert!(matches!(
         phys_reader.read(0x0242_4fff.into(), &mut buffer),
         Ok(0x10)
@@ -883,7 +882,7 @@ fn straddle_phys() {
 #[test]
 fn partial_phys() {
     let parser = KernelDumpParser::new(WOW64_DUMP_PATH.as_path()).unwrap();
-    let phys_reader = phys::Reader::new(&parser);
+    let phys_reader = parser.phys();
 
     let mut buffer = [0; 0x11];
     // ```text
@@ -1012,7 +1011,8 @@ fn rdmp_range_table_does_not_include_page_data() {
         assert_eq!(parser.gpas().collect::<Vec<_>>(), [Gpa::new(0x1_000)]);
 
         let mut buffer = [0; 0x1_000];
-        phys::Reader::new(&parser)
+        parser
+            .phys()
             .read_exact(Gpa::new(0x1_000), &mut buffer)
             .unwrap();
         assert_eq!(buffer, [0x41; 0x1_000]);
@@ -1237,11 +1237,11 @@ fn cyclic_module_list_is_dropped() {
     // the list head again.
     let data = fs::read(BMP_PATH.as_path()).unwrap();
     let parser = KernelDumpParser::with_reader(Cursor::new(&data)).unwrap();
-    let virt_reader = virt::Reader::new(&parser);
+    let virt_reader = parser.virt();
     let head = Gva::new(parser.headers().ps_loaded_module_list);
     let first = virt_reader.read_struct::<u64>(head).unwrap();
     let gpa = virt_reader.translate(Gva::new(first)).unwrap().gpa();
-    let SeekFrom::Start(offset) = phys::Reader::new(&parser).translate(gpa).unwrap() else {
+    let SeekFrom::Start(offset) = parser.phys().translate(gpa).unwrap() else {
         unreachable!()
     };
     drop(parser);
