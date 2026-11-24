@@ -870,6 +870,7 @@ fn straddle_phys() {
 
     assert_eq!(buffer, expected);
 
+    let mut buffer = [0; 0x10];
     let phys_reader = parser.phys();
     assert!(matches!(
         phys_reader.read(0x0242_4fff.into(), &mut buffer),
