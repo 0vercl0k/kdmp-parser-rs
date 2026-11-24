@@ -14,7 +14,7 @@ use std::path::Path;
 use crate::bits::Bits;
 use crate::error::{Error, Result};
 use crate::gxa::{Gpa, Gva};
-use crate::map::{MappedFileReader, Reader};
+use crate::map::Reader;
 use crate::physindex::{Builder, PhysIndex};
 use crate::pxe::Pfn;
 use crate::structs::{
@@ -167,23 +167,11 @@ impl<'reader> KernelDumpParser<'reader> {
         Ok(parser)
     }
 
-    /// Create an instance from a file path; depending on the file size, it'll
-    /// either memory maps it or open it as a regular file.
+    /// Create an instance from a file path.
     pub fn new(dump_path: impl AsRef<Path>) -> Result<Self> {
-        const FOUR_GIGS: u64 = 1_024 * 1_024 * 1_024 * 4;
-        // We'll assume that if you are opening a dump file larger than 4gb, you
-        // don't want it memory mapped.
-        let size = dump_path.as_ref().metadata()?.len();
+        let file = File::open(dump_path)?;
 
-        if let 0..=FOUR_GIGS = size {
-            let mapped_file = MappedFileReader::new(dump_path.as_ref())?;
-
-            Self::with_reader(mapped_file)
-        } else {
-            let file = File::open(dump_path)?;
-
-            Self::with_reader(file)
-        }
+        Self::with_reader(file)
     }
 
     /// Get a list of every GPAs available in this dump.
