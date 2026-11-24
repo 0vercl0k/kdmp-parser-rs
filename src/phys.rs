@@ -71,7 +71,7 @@ impl<'parser, 'reader> Reader<'parser, 'reader> {
             // of bytes we can read off this page. Either, we read
             // it until its end, or we stop if the user wants us to read
             // less.
-            let left_in_page = usize::try_from(PageKind::Normal.len() - gpa.offset()).unwrap();
+            let left_in_page = usize::try_from(PageKind::Normal.len() - addr.offset()).unwrap();
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];

@@ -809,6 +809,39 @@ fn large_page() {
 }
 
 #[test]
+fn straddle_phys() {
+    let parser = KernelDumpParser::new(FULL_PATH.as_path()).unwrap();
+    let mut buffer = [0; 0x10];
+    let expected = [0x01, 0x75, 0xf0, 0x49, 0x8b, 0xc0, 0x48, 0xf7, 0xd8, 0x1b, 0xc9, 0xf7, 0xd1, 0x81, 0xe1, 0x0d];
+
+    // ```text
+    // kd> !pte nt+1000+fff
+    //                                            VA fffff805106b4fff
+    // PXE at FFFFF47A3D1E8F80    PPE at FFFFF47A3D1F00A0    PDE at FFFFF47A3E014418    PTE at FFFFF47C028835A0
+    // contains 0000000000C48063  contains 0000000000C49063  contains 0000000000C13063  contains 0900000002424863
+    // pfn c48       ---DA--KWEV  pfn c49       ---DA--KWEV  pfn c13       ---DA--KWEV  pfn 2424      ---DA--KWEV
+    //
+    // kd> !db 2424000+fff l10
+    // # 2424fff 01 75 f0 49 8b c0 48 f7-d8 1b c9 f7 d1 81 e1 0d .u.I..H.........
+    // ```
+    let virt_reader = virt::Reader::new(&parser);
+    assert!(matches!(
+        virt_reader.read(0xffff_f805_106b_4fff.into(), &mut buffer),
+        Ok(0x10)
+    ));
+
+    assert_eq!(buffer, expected);
+
+    let phys_reader = phys::Reader::new(&parser);
+    assert!(matches!(
+        phys_reader.read(0x0242_4fff.into(), &mut buffer),
+        Ok(0x10)
+    ));
+
+    assert_eq!(buffer, expected);
+}
+
+#[test]
 fn partial_phys() {
     let parser = KernelDumpParser::new(WOW64_DUMP_PATH.as_path()).unwrap();
     let phys_reader = phys::Reader::new(&parser);
