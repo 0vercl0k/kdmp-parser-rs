@@ -8,7 +8,7 @@ use std::mem::MaybeUninit;
 use crate::error::{Error, PageReadError, Result};
 use crate::gxa::{Gpa, Gxa};
 use crate::parse::KernelDumpParser;
-use crate::structs::PageKind;
+use crate::structs::{PageKind, Pod};
 
 /// A reader lets you translate & read physical memory from a dump file.
 pub struct Reader<'parser, 'reader> {
@@ -102,7 +102,7 @@ impl<'parser, 'reader> Reader<'parser, 'reader> {
     }
 
     /// Read a `T` from physical memory.
-    pub fn read_struct<T>(&self, gpa: Gpa) -> Result<T> {
+    pub fn read_struct<T: Pod>(&self, gpa: Gpa) -> Result<T> {
         let mut t: MaybeUninit<T> = MaybeUninit::uninit();
         let size_of_t = size_of_val(&t);
         let slice_over_t =
