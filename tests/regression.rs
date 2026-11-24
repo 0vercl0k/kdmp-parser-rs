@@ -5,8 +5,9 @@ use std::io::{Cursor, Read, SeekFrom};
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::LazyLock;
-use std::{env, fs};
+use std::{assert_matches, env, fs};
 
+use kdmp_parser::error::Error::InvalidData;
 use kdmp_parser::error::{Error, PageReadError, PxeKind};
 use kdmp_parser::gxa::{Gpa, Gva};
 use kdmp_parser::parse::KernelDumpParser;
@@ -953,7 +954,24 @@ fn synthetic_dump(dump_type: DumpType, patch: impl Fn(&mut [u8]), tail: &[u8]) -
 
 /// Builds a one-range RDMP dump declaring `pages`, with one backed page at
 /// `PFN:0x1_000`.
-fn synthetic_rdmp_dump(dump_type: DumpType, pages: u64) -> Vec<u8> {
+#[derive(Debug, Clone, Copy)]
+enum RdmpDumps {
+    Kernel,
+    KernelAndUser,
+    Complete,
+}
+
+impl From<RdmpDumps> for DumpType {
+    fn from(value: RdmpDumps) -> Self {
+        match value {
+            RdmpDumps::Kernel => Self::KernelMemory,
+            RdmpDumps::KernelAndUser => Self::KernelAndUserMemory,
+            RdmpDumps::Complete => Self::CompleteMemory,
+        }
+    }
+}
+
+fn synthetic_rdmp_dump(dump_type: RdmpDumps, pages: u64) -> Vec<u8> {
     synthetic_rdmp_dump_with_ranges(
         dump_type,
         &[PfnRange {
@@ -965,9 +983,9 @@ fn synthetic_rdmp_dump(dump_type: DumpType, pages: u64) -> Vec<u8> {
 }
 
 /// Builds an RDMP dump with explicit [`PfnRange`]s and `backed_pages` pages of
-/// data.
+/// data (filled w/ `0x41`).
 fn synthetic_rdmp_dump_with_ranges(
-    dump_type: DumpType,
+    dump_type: RdmpDumps,
     ranges: &[PfnRange],
     backed_pages: usize,
 ) -> Vec<u8> {
@@ -997,15 +1015,15 @@ fn synthetic_rdmp_dump_with_ranges(
 
     // Materialize the backing pages now, at the end of the `krdmp_data`.
     krdmp_data.resize(krdmp_data.len() + backed_pages * 0x1_000, 0x41);
-    synthetic_dump(dump_type, |_| {}, &krdmp_data)
+    synthetic_dump(dump_type.into(), |_| {}, &krdmp_data)
 }
 
 #[test]
 fn rdmp_range_table_does_not_include_page_data() {
     for dump_type in [
-        DumpType::KernelMemory,
-        DumpType::KernelAndUserMemory,
-        DumpType::CompleteMemory,
+        RdmpDumps::Kernel,
+        RdmpDumps::KernelAndUser,
+        RdmpDumps::Complete,
     ] {
         let parser =
             KernelDumpParser::with_reader(Cursor::new(synthetic_rdmp_dump(dump_type, 1))).unwrap();
@@ -1023,9 +1041,9 @@ fn rdmp_range_table_does_not_include_page_data() {
 #[test]
 fn rdmp_descriptor_page_counts_are_checked() {
     for dump_type in [
-        DumpType::KernelMemory,
-        DumpType::KernelAndUserMemory,
-        DumpType::CompleteMemory,
+        RdmpDumps::Kernel,
+        RdmpDumps::KernelAndUser,
+        RdmpDumps::Complete,
     ] {
         let one_page = synthetic_rdmp_dump(dump_type, 1);
         let two_pages = synthetic_rdmp_dump_with_ranges(
@@ -1075,9 +1093,9 @@ fn rdmp_descriptor_page_counts_are_checked() {
 #[test]
 fn rdmp_descriptor_range_counts_are_checked() {
     for dump_type in [
-        DumpType::KernelMemory,
-        DumpType::KernelAndUserMemory,
-        DumpType::CompleteMemory,
+        RdmpDumps::Kernel,
+        RdmpDumps::KernelAndUser,
+        RdmpDumps::Complete,
     ] {
         for declared_runs in [0, 2, u32::MAX] {
             let mut data = synthetic_rdmp_dump(dump_type, 1);
@@ -1098,9 +1116,9 @@ fn rdmp_descriptor_range_counts_are_checked() {
 #[test]
 fn rdmp_descriptor_counts_include_zero_pfn() {
     for dump_type in [
-        DumpType::KernelMemory,
-        DumpType::KernelAndUserMemory,
-        DumpType::CompleteMemory,
+        RdmpDumps::Kernel,
+        RdmpDumps::KernelAndUser,
+        RdmpDumps::Complete,
     ] {
         let data = synthetic_rdmp_dump_with_ranges(
             dump_type,
@@ -1126,12 +1144,12 @@ fn rdmp_descriptor_counts_include_zero_pfn() {
 
 #[test]
 fn rdmp_range_table_bounds_are_checked() {
-    let mut truncated = synthetic_rdmp_dump(DumpType::KernelMemory, 1);
+    let mut truncated = synthetic_rdmp_dump(RdmpDumps::Kernel, 1);
     truncated.truncate(
         size_of::<Header64>() + size_of::<KernelRdmpHeader64>() + size_of::<PfnRange>() - 1,
     );
 
-    let mut unaligned = synthetic_rdmp_dump(DumpType::KernelMemory, 1);
+    let mut unaligned = synthetic_rdmp_dump(RdmpDumps::Kernel, 1);
     let h = pod_mut::<RdmpHeader64>(&mut unaligned[size_of::<Header64>()..]).unwrap();
     h.metadata_size += 1;
     h.first_page_offset += 1;
@@ -1217,7 +1235,7 @@ fn header_counts_checked_against_file_length() {
         ),
         // Kernel dump with a range of 2^36 pages (but only one backed page).
         (
-            synthetic_rdmp_dump(DumpType::KernelMemory, 1 << 36),
+            synthetic_rdmp_dump(RdmpDumps::Kernel, 1 << 36),
             "pfn range doesn't fit",
         ),
     ];
@@ -1284,4 +1302,33 @@ fn small_rdmp_sizes_do_not_underflow() {
             "metadata_size={metadata_size:#x}, first_page_offset={first_page_offset:#x}: {res:?}"
         );
     }
+}
+#[test]
+fn gpa_overflow() {
+    let dump = synthetic_rdmp_dump_with_ranges(
+        RdmpDumps::Complete,
+        &[PfnRange {
+            page_file_number: 0x000f_ffff_ffff_ffff,
+            number_of_pages: 1,
+        }],
+        1,
+    );
+
+    let parser = KernelDumpParser::with_reader(Cursor::new(dump)).unwrap();
+    let mut byte = [0; 1];
+    assert!(
+        parser
+            .phys_reader()
+            .read_exact(0xffff_ffff_ffff_ffff.into(), &mut byte)
+            .is_ok()
+    );
+    assert_eq!(byte, [0x41]);
+
+    let mut bytes = [0; 2];
+    assert_matches!(
+        parser
+            .phys_reader()
+            .read_exact(0xffff_ffff_ffff_ffff.into(), &mut bytes),
+        Err(InvalidData("gpa overflow"))
+    );
 }

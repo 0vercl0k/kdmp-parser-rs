@@ -260,8 +260,19 @@ impl<'parser, 'reader> Reader<'parser, 'reader> {
             total_read += amount_wanted;
             amount_left -= amount_wanted;
             // We have more work to do, so let's move to the next page.
-            addr +=
+            let amount_wanted =
                 u64::try_from(amount_wanted).map_err(|_| Error::InvalidData("truncation virt"))?;
+
+            // Break if we're done. This is done prior to moving the address
+            // forward to not transform a read of 1 byte at
+            // `0xffff_ffff_ffff_ffff` into an overflow error for example.
+            if amount_left == 0 {
+                break;
+            }
+
+            addr = addr
+                .checked_add(amount_wanted)
+                .ok_or(Error::InvalidData("gva overflow"))?;
         }
 
         // Yay, we read as much bytes as the user wanted!

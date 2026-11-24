@@ -54,6 +54,11 @@ pub trait Gxa: Sized + Default + Copy + From<u64> {
                 .expect("Cannot overflow"),
         )
     }
+
+    #[must_use]
+    fn checked_add(self, offset: u64) -> Option<Self> {
+        self.u64().checked_add(offset).map(Self::from)
+    }
 }
 
 /// Strong type for Guest Physical Addresses.
@@ -284,7 +289,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::gxa::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::Gva;
     /// # fn main() {
     /// let gva = Gva::new(0xdeadbeef);
     /// # }
@@ -299,7 +304,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::gxa::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::Gva;
     /// # fn main() {
     /// let first = Gva::new(0xff_ff_b9_dc_ee_77_31_37);
     /// assert_eq!(first.pte_idx(), 371);
@@ -318,7 +323,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::gxa::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::Gva;
     /// # fn main() {
     /// let first = Gva::new(0xff_ff_b9_dc_ee_77_31_37);
     /// assert_eq!(first.pde_idx(), 371);
@@ -337,7 +342,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::gxa::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::Gva;
     /// # fn main() {
     /// let first = Gva::new(0xff_ff_b9_dc_ee_77_31_37);
     /// assert_eq!(first.pdpe_idx(), 371);
@@ -355,7 +360,7 @@ impl Gva {
     /// # Examples
     ///
     /// ```
-    /// # use kdmp_parser::gxa::{Gxa, Gva};
+    /// # use kdmp_parser::gxa::Gva;
     /// # fn main() {
     /// let first = Gva::new(0xff_ff_b9_dc_ee_77_31_37);
     /// assert_eq!(first.pml4e_idx(), 371);
