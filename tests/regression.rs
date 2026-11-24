@@ -658,6 +658,7 @@ fn large_page() {
     // Read from the middle of a large page.
     //
     // ```text
+    // 32.1: kd:x86> !wow64exts.sw
     // 32.1: kd> !pte nt
     //                                            VA fffff80122800000
     // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A0    PTE at FFFFF5FC00914000
@@ -713,6 +714,41 @@ fn large_page() {
 
     assert_eq!(buffer, [
         0x63, 0x00, 0x72, 0x00, 0x6f, 0x00, 0x73, 0x00, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
+        0xcc
+    ]);
+
+    // And read through a full large pages
+    // ```text
+    // 32.1: kd> !pte 0xfffff80122800000
+    //                                            VA fffff80122800000
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A0    PTE at FFFFF5FC00914000
+    // contains 0000000002709063  contains 000000000270A063  contains 8A000000048001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 4800
+    //
+    // 32.1: kd> !pte 0xfffff80122800000 + 0x200000
+    //                                            VA fffff80122a00000
+    // PXE at FFFFF5FAFD7EBF80    PPE at FFFFF5FAFD7F0020    PDE at FFFFF5FAFE0048A8    PTE at FFFFF5FC00915000
+    // contains 0000000002709063  contains 000000000270A063  contains 0A00000004A001A1  contains 0000000000000000
+    // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4a00      -GL-A--KREV  LARGE PAGE pfn 4a00
+    //
+    // 32.1: kd> db 0xfffff80122800000
+    // 002b:fffff801`22800000  4d 5a 90 00 03 00 00 00-04 00 00 00 ff ff 00 00  MZ..............
+    //
+    // 32.1: kd> db 0xfffff80122800000 + 0x200000
+    // 002b:fffff801`22a00000  cc cc cc cc cc cc cc cc-cc cc cc cc cc cc cc cc  ................    // ```
+    // ```
+    let mut big_buffer = vec![0; usize::try_from(PageKind::Large.len()).unwrap() + 0x10];
+    virt_reader
+        .read_exact(Gva::new(0xffff_f801_2280_0000), &mut big_buffer)
+        .unwrap();
+
+    assert_eq!(big_buffer[..0x10], [
+        0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xff, 0xff, 0x00,
+        0x00
+    ]);
+
+    assert_eq!(big_buffer.last_chunk::<0x10>().unwrap(), &[
+        0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc,
         0xcc
     ]);
 
@@ -812,7 +848,10 @@ fn large_page() {
 fn straddle_phys() {
     let parser = KernelDumpParser::new(FULL_PATH.as_path()).unwrap();
     let mut buffer = [0; 0x10];
-    let expected = [0x01, 0x75, 0xf0, 0x49, 0x8b, 0xc0, 0x48, 0xf7, 0xd8, 0x1b, 0xc9, 0xf7, 0xd1, 0x81, 0xe1, 0x0d];
+    let expected = [
+        0x01, 0x75, 0xf0, 0x49, 0x8b, 0xc0, 0x48, 0xf7, 0xd8, 0x1b, 0xc9, 0xf7, 0xd1, 0x81, 0xe1,
+        0x0d,
+    ];
 
     // ```text
     // kd> !pte nt+1000+fff
