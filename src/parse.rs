@@ -142,7 +142,7 @@ impl<'reader> KernelDumpParser<'reader> {
         // are. If we can't read the block, we'll have to stop the
         // adventure here as we won't be able to read the things we need
         // to keep going.
-        let virt_reader = virt::Reader::new(&parser);
+        let virt_reader = parser.virt_reader();
         let Some(kd_debugger_data_block) = virt_reader
             .try_read_struct::<KdDebuggerData64>(parser.headers().kd_debugger_data_block.into())?
         else {
@@ -175,18 +175,18 @@ impl<'reader> KernelDumpParser<'reader> {
     }
 
     /// Create a virtual memory reader. Shorthand for [`virt::Reader::new`].
-    pub fn virt<'s>(&'s self) -> virt::Reader<'s, 'reader> {
+    pub fn virt_reader<'s>(&'s self) -> virt::Reader<'s, 'reader> {
         virt::Reader::new(self)
     }
 
     /// Create a virtual memory reader w/ a dtb. Shorthand for
     /// [`virt::Reader::with_dtb`].
-    pub fn virt_with_dtb<'s>(&'s self, dtb: Gpa) -> virt::Reader<'s, 'reader> {
+    pub fn virt_reader_with_dtb<'s>(&'s self, dtb: Gpa) -> virt::Reader<'s, 'reader> {
         virt::Reader::with_dtb(self, dtb)
     }
 
     /// Create a physical memory reader. Shorthand for [`phys::Reader::new`].
-    pub fn phys<'s>(&'s self) -> phys::Reader<'s, 'reader> {
+    pub fn phys_reader<'s>(&'s self) -> phys::Reader<'s, 'reader> {
         phys::Reader::new(self)
     }
 

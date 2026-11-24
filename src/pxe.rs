@@ -111,7 +111,7 @@ impl Deref for PxeFlags {
 /// # Examples
 ///
 /// ```
-/// # use kdmp_parser::gxa::Gpa;
+/// # use kdmp_parser::gxa::{Gxa, Gpa};
 /// # use kdmp_parser::pxe::Pfn;
 /// # fn main() {
 /// let pfn = Pfn::new(0x1337);

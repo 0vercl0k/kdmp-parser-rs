@@ -427,8 +427,8 @@ fn regressions() {
 
     for test in tests {
         let parser = KernelDumpParser::new(&test.file).unwrap();
-        let virt_reader = parser.virt();
-        let phys_reader = parser.phys();
+        let virt_reader = parser.virt_reader();
+        let phys_reader = parser.phys_reader();
         eprintln!("{parser:?}");
         assert_eq!(parser.dump_type(), test.dump_type);
         assert_eq!(parser.gpas().len(), usize::try_from(test.size).unwrap());
@@ -478,7 +478,7 @@ fn transition_pte() {
     //                                                                                  Protect: 4 - ReadWrite
     // ```
     let parser = KernelDumpParser::new(KERNEL_USER_DUMP_PATH.as_path()).unwrap();
-    let reader = parser.virt();
+    let reader = parser.virt_reader();
     let mut buffer = [0; 16];
     let expected_buffer = [
         0xe0, 0x07, 0xa3, 0x2e, 0xa4, 0x01, 0x00, 0x00, 0x80, 0xf2, 0xa2, 0x2e, 0xa4, 0x01, 0x00,
@@ -519,54 +519,54 @@ fn valid_pte_no_backing() {
     // Physical memory read at 1bc4000 failed
     // ```
     let parser = KernelDumpParser::new(KERNEL_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = parser.virt();
+    let virt_reader = parser.virt_reader();
     let mut buffer = [0];
-    assert!(matches!(
+    assert_matches!(
         virt_reader
             .read(0x01a4_2ea3_0240.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(0)
-    ));
+    );
 
-    assert!(matches!(
+    assert_matches!(
         virt_reader.read_exact(0x01a4_2ea3_0240.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
             Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: Some((gva, None)), gpa }, ..}
         ) if gpa == 0x166b_7240.into() && gva == 0x01a4_2ea3_0240.into()
-    ));
+    );
 
-    assert!(matches!(
+    assert_matches!(
         virt_reader
             .try_read_exact(0x01a4_2ea3_0240.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(None)
-    ));
+    );
 
-    let phys_reader = parser.phys();
-    assert!(matches!(
+    let phys_reader = parser.phys_reader();
+    assert_matches!(
         phys_reader
             .read(Gpa::new(0x166b_7240), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(0)
-    ));
+    );
 
-    assert!(matches!(
+    assert_matches!(
         phys_reader.read_exact(Gpa::new(0x166b_7240), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: None, gpa }, ..
         }) if gpa == 0x166b_7240.into()
-    ));
+    );
 
-    assert!(matches!(
+    assert_matches!(
         virt_reader.read_exact(0x0016_e23f_a060.into(), &mut buffer).inspect_err(|e| eprintln!("{e:?}")),
         Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: Some((gva, None)), gpa }, ..}
         ) if gpa == 0x01bc_4060.into() && gva == 0x0016_e23f_a060.into()
-    ));
+    );
 
-    assert!(matches!(
+    assert_matches!(
         virt_reader
             .try_read_exact(0x0016_e23f_a060.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(None)
-    ));
+    );
 }
 
 #[test]
@@ -602,10 +602,10 @@ fn bug_10() {
     // fffff803`f308700f  ?? ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  ????????????????
     // ```
     let parser = KernelDumpParser::new(KERNEL_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = parser.virt();
+    let virt_reader = parser.virt_reader();
 
     let mut buffer = [0; 32];
-    assert!(matches!(
+    assert_matches!(
         virt_reader
             .read_exact(0xffff_f803_f308_6fef.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
@@ -615,14 +615,14 @@ fn bug_10() {
             actual_amount: 17,
             reason: PageReadError::NotPresent { gva, which_pxe }
         }) if gva == 0xffff_f803_f308_7000.into() && which_pxe == PxeKind::Pte,
-    ));
+    );
 
-    assert!(matches!(
+    assert_matches!(
         virt_reader
             .read(0xffff_f803_f308_6fef.into(), &mut buffer)
             .inspect_err(|e| eprintln!("{e:?}")),
         Ok(17)
-    ));
+    );
 
     // ```text
     // kd> !process 0 0
@@ -638,7 +638,7 @@ fn bug_10() {
     // 0000015c`c6603938  69 00 6d 00 65 00 42 00-72 00 6f 00 6b 00 65 00  i.m.e.B.r.o.k.e.
     // ```
     let parser = KernelDumpParser::new(COMPLETE_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = parser.virt_with_dtb(0x0ea0_0002.into());
+    let virt_reader = parser.virt_reader_with_dtb(0x0ea0_0002.into());
     let mut buffer = [0; 64];
     virt_reader
         .read_exact(0x015c_c660_3908.into(), &mut buffer)
@@ -666,10 +666,10 @@ fn large_page() {
     // pfn 2709      ---DA--KWEV  pfn 270a      ---DA--KWEV  pfn 4800      -GL-A--KR-V  LARGE PAGE pfn 4800
     // ```
     let parser = KernelDumpParser::new(WOW64_DUMP_PATH.as_path()).unwrap();
-    let virt_reader = parser.virt();
+    let virt_reader = parser.virt_reader();
     let tr = virt_reader.translate(0xffff_f801_2280_0000.into()).unwrap();
-    assert!(matches!(tr.page_kind, PageKind::Large));
-    assert!(matches!(tr.pfn.u64(), 0x48_00));
+    assert_eq!(tr.page_kind, PageKind::Large);
+    assert_eq!(tr.pfn.u64(), 0x48_00);
     let mut buffer = [0; 0x10];
     // ```text
     // 32.1: kd> db 0xfffff80122800000 + 0x100000 - 8
@@ -828,20 +828,20 @@ fn large_page() {
     //                                                                                   Page has been freed
     // ```
     let gva = 0.into();
-    assert!(matches!(
+    assert_matches!(
         virt_reader.translate(gva),
         Err(Error::PageRead(
             PageReadError::NotPresent { gva: fault_gva, which_pxe: PxeKind::Pde }
         )) if fault_gva == gva
-    ));
+    );
 
     let gva = 0xffff_ffff_ffff_ffff.into();
-    assert!(matches!(
+    assert_matches!(
         virt_reader.translate(gva),
         Err(Error::PageRead(
             PageReadError::NotPresent { gva: fault_gva, which_pxe: PxeKind::Pte }
         )) if fault_gva == gva
-    ));
+    );
 }
 
 #[test]
@@ -863,20 +863,17 @@ fn straddle_phys() {
     // kd> !db 2424000+fff l10
     // # 2424fff 01 75 f0 49 8b c0 48 f7-d8 1b c9 f7 d1 81 e1 0d .u.I..H.........
     // ```
-    let virt_reader = parser.virt();
-    assert!(matches!(
+    let virt_reader = parser.virt_reader();
+    assert_matches!(
         virt_reader.read(0xffff_f805_106b_4fff.into(), &mut buffer),
         Ok(0x10)
-    ));
+    );
 
     assert_eq!(buffer, expected);
 
     let mut buffer = [0; 0x10];
-    let phys_reader = parser.phys();
-    assert!(matches!(
-        phys_reader.read(0x0242_4fff.into(), &mut buffer),
-        Ok(0x10)
-    ));
+    let phys_reader = parser.phys_reader();
+    assert_matches!(phys_reader.read(0x0242_4fff.into(), &mut buffer), Ok(0x10));
 
     assert_eq!(buffer, expected);
 }
@@ -884,7 +881,7 @@ fn straddle_phys() {
 #[test]
 fn partial_phys() {
     let parser = KernelDumpParser::new(WOW64_DUMP_PATH.as_path()).unwrap();
-    let phys_reader = parser.phys();
+    let phys_reader = parser.phys_reader();
 
     let mut buffer = [0; 0x11];
     // ```text
@@ -893,19 +890,16 @@ fn partial_phys() {
     // kd> !db 0x15000 l1
     // Physical memory read at 15000 failed
     // ```
-    assert!(matches!(
-        phys_reader.read(0x01_4f_f0.into(), &mut buffer),
-        Ok(0x10)
-    ));
+    assert_matches!(phys_reader.read(0x01_4f_f0.into(), &mut buffer), Ok(0x10));
 
-    assert!(matches!(
+    assert_matches!(
         phys_reader.read_exact(0x01_4f_f0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
         Err(Error::PartialRead {
             expected_amount,
             actual_amount: 0x10,
             reason: PageReadError::NotInDump { gva: None, gpa }
         }) if expected_amount == buffer.len() && gpa == 0x01_50_00.into()
-    ));
+    );
 
     // ```text
     // kd> !db 0000000000016000 - 10 l10
@@ -913,15 +907,12 @@ fn partial_phys() {
     // kd> !db 16000 l10
     // #   16000 00 04 04 03 50 6e 70 5a-00 00 00 00 00 00 00 00 ....PnpZ........
     // ```
-    assert!(matches!(
-        phys_reader.read(0x01_5f_f0.into(), &mut buffer),
-        Ok(0)
-    ));
+    assert_matches!(phys_reader.read(0x01_5f_f0.into(), &mut buffer), Ok(0));
 
-    assert!(matches!(
+    assert_matches!(
         phys_reader.read_exact(0x01_5f_f0.into(), &mut buffer).inspect(|e| eprintln!("{e:?}")),
         Err(Error::PartialRead { reason: PageReadError::NotInDump { gva: None, gpa }, .. }) if gpa == 0x01_5f_f0.into()
-    ));
+    );
 }
 
 fn pod_mut<T: Pod>(bytes: &mut [u8]) -> Option<&mut T> {
@@ -1031,7 +1022,7 @@ fn rdmp_range_table_does_not_include_page_data() {
 
         let mut buffer = [0; 0x1_000];
         parser
-            .phys()
+            .phys_reader()
             .read_exact(Gpa::new(0x1_000), &mut buffer)
             .unwrap();
         assert_eq!(buffer, [0x41; 0x1_000]);
@@ -1256,11 +1247,11 @@ fn cyclic_module_list_is_dropped() {
     // the list head again.
     let data = fs::read(BMP_PATH.as_path()).unwrap();
     let parser = KernelDumpParser::with_reader(Cursor::new(&data)).unwrap();
-    let virt_reader = parser.virt();
+    let virt_reader = parser.virt_reader();
     let head = Gva::new(parser.headers().ps_loaded_module_list);
     let first = virt_reader.read_struct::<u64>(head).unwrap();
     let gpa = virt_reader.translate(Gva::new(first)).unwrap().gpa();
-    let SeekFrom::Start(offset) = parser.phys().translate(gpa).unwrap() else {
+    let SeekFrom::Start(offset) = parser.phys_reader().translate(gpa).unwrap() else {
         unreachable!()
     };
     drop(parser);
