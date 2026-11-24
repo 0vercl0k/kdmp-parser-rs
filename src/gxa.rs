@@ -148,10 +148,16 @@ impl Gpa {
     }
 }
 
-/// Operator += for [`Gpa`].
+/// Operators += for [`Gpa`].
 impl AddAssign for Gpa {
     fn add_assign(&mut self, rhs: Self) {
         self.0 += rhs.0;
+    }
+}
+
+impl AddAssign<u64> for Gpa {
+    fn add_assign(&mut self, rhs: u64) {
+        self.0 += rhs;
     }
 }
 
@@ -363,10 +369,16 @@ impl Gva {
     }
 }
 
-/// Operator += for [`Gva`].
+/// Operators += for [`Gva`].
 impl AddAssign for Gva {
     fn add_assign(&mut self, rhs: Self) {
         self.0 += rhs.0;
+    }
+}
+
+impl AddAssign<u64> for Gva {
+    fn add_assign(&mut self, rhs: u64) {
+        self.0 += rhs;
     }
 }
 
