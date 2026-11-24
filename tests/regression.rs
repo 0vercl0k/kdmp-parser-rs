@@ -1294,6 +1294,53 @@ fn small_rdmp_sizes_do_not_underflow() {
         );
     }
 }
+
+#[test]
+fn empty_reads() {
+    let data = fs::read(BMP_PATH.as_path()).unwrap();
+    let parser = KernelDumpParser::with_reader(Cursor::new(&data)).unwrap();
+
+    // ```text
+    // kd> db @rip l1
+    // fffff805`108776a0  cc
+    //
+    // kd> !db 25e7000
+    // # 25e7000 ee ff ff ff 48 83 c4 08-e8 ee ff ff ff 48 83 c4 ....H........H..
+    // # 25e7010 08 e8 ee ff ff ff 48 83-c4 08 e8 ee ff ff ff 48 ......H........H
+    // # 25e7020 83 c4 08 e8 ee ff ff ff-48 83 c4 08 e8 ee ff ff ........H.......
+    // # 25e7030 ff 48 83 c4 08 e8 ee ff-ff ff 48 83 c4 08 e8 ee .H........H.....
+    // # 25e7040 ff ff ff 48 83 c4 08 e8-ee ff ff ff 48 83 c4 08 ...H........H...
+    // # 25e7050 e8 ee ff ff ff 48 83 c4-08 e8 ee ff ff ff 48 83 .....H........H.
+    // # 25e7060 c4 08 e8 ee ff ff ff 48-83 c4 08 e8 ee ff ff ff .......H........
+    // # 25e7070 48 83 c4 08 e8 ee ff ff-ff 48 83 c4 08 e8 ee ff H........H......
+    //
+    // kd> !db 25e7000+6a0 l1
+    // # 25e76a0 cc
+    // ```
+    assert!(
+        parser
+            .phys_reader()
+            .read_exact(0x025e_76a0.into(), &mut [])
+            .is_ok()
+    );
+    assert!(
+        parser
+            .virt_reader()
+            .read_exact(0xffff_f805_1087_76a0.into(), &mut [])
+            .is_ok()
+    );
+
+    // ```text
+    // kd> !db 0
+    // Physical memory read at 0 failed
+    //
+    // kd> db 0
+    // 00000000`00000000  ?? ?? ?? ?? ?? ?? ?? ??-?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+    // ```
+    assert!(parser.phys_reader().read_exact(0.into(), &mut []).is_ok());
+    assert!(parser.virt_reader().read_exact(0.into(), &mut []).is_ok());
+}
+
 #[test]
 fn gpa_overflow() {
     let dump = synthetic_rdmp_dump_with_ranges(
