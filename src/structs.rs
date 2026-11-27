@@ -527,25 +527,11 @@ unsafe impl Pod for RdmpHeader64 {}
 #[derive(Debug, Default)]
 pub struct KernelRdmpHeader64 {
     pub hdr: RdmpHeader64,
-    unknown1: u64,
-    unknown2: u64,
+    pub phys_desc: PhysmemDesc,
     // [`PfnRange`] array follows.
 }
 
 unsafe impl Pod for KernelRdmpHeader64 {}
-
-#[repr(C)]
-#[derive(Debug, Default)]
-pub struct FullRdmpHeader64 {
-    pub hdr: RdmpHeader64,
-    pub number_of_ranges: u32,
-    reserved1: u16,
-    reserved2: u16,
-    pub total_number_of_pages: u64,
-    // [`PfnRange`] array follows.
-}
-
-unsafe impl Pod for FullRdmpHeader64 {}
 
 #[repr(C)]
 #[derive(Debug, Default)]
@@ -815,3 +801,4 @@ const _: () = assert!(size_of::<PhysmemDesc>() == 0x10);
 const _: () = assert!(size_of::<PhysmemRun>() == 0x10);
 const _: () = assert!(size_of::<Header64>() == 0x2_000);
 const _: () = assert!(size_of::<Context>() == 0x4d0);
+const _: () = assert!(size_of::<KernelRdmpHeader64>() == 0x30);

@@ -41,52 +41,52 @@ impl PxeFlags {
 
     #[must_use]
     pub fn present(&self) -> bool {
-        self.0.bit(0) != 0
+        self.0.bit_at(0) != 0
     }
 
     #[must_use]
     pub fn writable(&self) -> bool {
-        self.0.bit(1) != 0
+        self.0.bit_at(1) != 0
     }
 
     #[must_use]
     pub fn user_accessible(&self) -> bool {
-        self.0.bit(2) != 0
+        self.0.bit_at(2) != 0
     }
 
     #[must_use]
     pub fn write_through(&self) -> bool {
-        self.0.bit(3) != 0
+        self.0.bit_at(3) != 0
     }
 
     #[must_use]
     pub fn cache_disabled(&self) -> bool {
-        self.0.bit(4) != 0
+        self.0.bit_at(4) != 0
     }
 
     #[must_use]
     pub fn accessed(&self) -> bool {
-        self.0.bit(5) != 0
+        self.0.bit_at(5) != 0
     }
 
     #[must_use]
     pub fn dirty(&self) -> bool {
-        self.0.bit(6) != 0
+        self.0.bit_at(6) != 0
     }
 
     #[must_use]
     pub fn large_page(&self) -> bool {
-        self.0.bit(7) != 0
+        self.0.bit_at(7) != 0
     }
 
     #[must_use]
     pub fn transition(&self) -> bool {
-        self.0.bit(11) != 0
+        self.0.bit_at(11) != 0
     }
 
     #[must_use]
     pub fn no_execute(&self) -> bool {
-        self.0.bit(63) != 0
+        self.0.bit_at(63) != 0
     }
 }
 
@@ -111,7 +111,7 @@ impl Deref for PxeFlags {
 /// # Examples
 ///
 /// ```
-/// # use kdmp_parser::gxa::Gpa;
+/// # use kdmp_parser::gxa::{Gxa, Gpa};
 /// # use kdmp_parser::pxe::Pfn;
 /// # fn main() {
 /// let pfn = Pfn::new(0x1337);

@@ -8,15 +8,15 @@ use std::mem::MaybeUninit;
 use crate::error::{Error, PageReadError, Result};
 use crate::gxa::{Gpa, Gxa};
 use crate::parse::KernelDumpParser;
-use crate::structs::PageKind;
+use crate::structs::{PageKind, Pod};
 
 /// A reader lets you translate & read physical memory from a dump file.
-pub struct Reader<'parser> {
-    parser: &'parser KernelDumpParser,
+pub struct Reader<'parser, 'reader> {
+    parser: &'parser KernelDumpParser<'reader>,
 }
 
-impl<'parser> Reader<'parser> {
-    pub fn new(parser: &'parser KernelDumpParser) -> Self {
+impl<'parser, 'reader> Reader<'parser, 'reader> {
+    pub fn new(parser: &'parser KernelDumpParser<'reader>) -> Self {
         Self { parser }
     }
 
@@ -71,7 +71,7 @@ impl<'parser> Reader<'parser> {
             // of bytes we can read off this page. Either, we read
             // it until its end, or we stop if the user wants us to read
             // less.
-            let left_in_page = usize::try_from(PageKind::Normal.len() - gpa.offset()).unwrap();
+            let left_in_page = usize::try_from(PageKind::Normal.len() - addr.offset()).unwrap();
             let amount_wanted = min(amount_left, left_in_page);
             // Figure out where we should read into.
             let slice = &mut buf[total_read..total_read + amount_wanted];
@@ -82,7 +82,19 @@ impl<'parser> Reader<'parser> {
             total_read += amount_wanted;
             amount_left -= amount_wanted;
             // We have more work to do, so let's move to the next page.
-            addr = addr.next_aligned_page();
+            let amount_wanted =
+                u64::try_from(amount_wanted).map_err(|_| Error::InvalidData("truncation phys"))?;
+
+            // Break if we're done. This is done prior to moving the address
+            // forward to not transform a read of 1 byte at
+            // `0xffff_ffff_ffff_ffff` into an overflow error for example.
+            if amount_left == 0 {
+                break;
+            }
+
+            addr = addr
+                .checked_add(amount_wanted)
+                .ok_or(Error::InvalidData("gpa overflow"))?;
         }
 
         // Yay, we read as much bytes as the user wanted!
@@ -102,7 +114,7 @@ impl<'parser> Reader<'parser> {
     }
 
     /// Read a `T` from physical memory.
-    pub fn read_struct<T>(&self, gpa: Gpa) -> Result<T> {
+    pub fn read_struct<T: Pod>(&self, gpa: Gpa) -> Result<T> {
         let mut t: MaybeUninit<T> = MaybeUninit::uninit();
         let size_of_t = size_of_val(&t);
         let slice_over_t =

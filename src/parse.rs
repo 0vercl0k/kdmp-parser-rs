@@ -14,18 +14,18 @@ use std::path::Path;
 use crate::bits::Bits;
 use crate::error::{Error, Result};
 use crate::gxa::{Gpa, Gva};
-use crate::map::{MappedFileReader, Reader};
+use crate::map::Reader;
 use crate::physindex::{Builder, PhysIndex};
 use crate::pxe::Pfn;
 use crate::structs::{
     BmpHeader64, Context, DUMP_HEADER64_EXPECTED_SIGNATURE, DUMP_HEADER64_EXPECTED_VALID_DUMP,
-    DumpType, ExceptionRecord64, FullRdmpHeader64, Header64, KdDebuggerData64, KernelRdmpHeader64,
-    PageKind, PfnRange, PhysmemDesc, PhysmemRun, Pod,
+    DumpType, ExceptionRecord64, Header64, KdDebuggerData64, KernelRdmpHeader64, PageKind,
+    PfnRange, PhysmemDesc, PhysmemRun, Pod,
 };
-use crate::virt;
 use crate::virt_utils::{
     ModuleMap, try_extract_kernel_modules, try_extract_user_modules, try_find_prcb,
 };
+use crate::{phys, virt};
 
 /// Calculate the pfn from a bitmap & bit index.
 fn pfn_from_bitmap_idxs(bitmap_idx: u64, bit_idx: u64) -> Option<Pfn> {
@@ -68,7 +68,7 @@ fn read_struct<T: Pod>(reader: &mut impl Reader) -> Result<T> {
 /// A kernel dump parser that gives access to the physical memory space stored
 /// in the dump. It also offers virtual to physical memory translation as well
 /// as a virtual read facility.
-pub struct KernelDumpParser {
+pub struct KernelDumpParser<'reader> {
     /// Which type of dump is it?
     dump_type: DumpType,
     /// Context header.
@@ -79,7 +79,7 @@ pub struct KernelDumpParser {
     pub(crate) physidx: PhysIndex,
     /// The [`Reader`] object that allows us to seek / read the dump file which
     /// could be memory mapped, read from a file, etc.
-    reader: RefCell<Box<dyn Reader>>,
+    reader: RefCell<Box<dyn Reader + 'reader>>,
     /// The driver modules loaded when the crash-dump was taken. Extracted from
     /// the nt!PsLoadedModuleList.
     kernel_modules: ModuleMap,
@@ -88,7 +88,7 @@ pub struct KernelDumpParser {
     user_modules: ModuleMap,
 }
 
-impl Debug for KernelDumpParser {
+impl Debug for KernelDumpParser<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("KernelDumpParser")
             .field("dump_type", &self.dump_type)
@@ -96,9 +96,9 @@ impl Debug for KernelDumpParser {
     }
 }
 
-impl KernelDumpParser {
+impl<'reader> KernelDumpParser<'reader> {
     /// Create an instance from a [`Reader`] & parse the file.
-    pub fn with_reader(mut reader: impl Reader + 'static) -> Result<Self> {
+    pub fn with_reader(mut reader: impl Reader + 'reader) -> Result<Self> {
         // Parse the dump header and check if things look right.
         let headers = Box::new(read_struct::<Header64>(&mut reader)?);
         if headers.signature != DUMP_HEADER64_EXPECTED_SIGNATURE {
@@ -142,7 +142,7 @@ impl KernelDumpParser {
         // are. If we can't read the block, we'll have to stop the
         // adventure here as we won't be able to read the things we need
         // to keep going.
-        let virt_reader = virt::Reader::new(&parser);
+        let virt_reader = parser.virt_reader();
         let Some(kd_debugger_data_block) = virt_reader
             .try_read_struct::<KdDebuggerData64>(parser.headers().kd_debugger_data_block.into())?
         else {
@@ -167,23 +167,27 @@ impl KernelDumpParser {
         Ok(parser)
     }
 
-    /// Create an instance from a file path; depending on the file size, it'll
-    /// either memory maps it or open it as a regular file.
+    /// Create an instance from a file path.
     pub fn new(dump_path: impl AsRef<Path>) -> Result<Self> {
-        const FOUR_GIGS: u64 = 1_024 * 1_024 * 1_024 * 4;
-        // We'll assume that if you are opening a dump file larger than 4gb, you
-        // don't want it memory mapped.
-        let size = dump_path.as_ref().metadata()?.len();
+        let file = File::open(dump_path)?;
 
-        if let 0..=FOUR_GIGS = size {
-            let mapped_file = MappedFileReader::new(dump_path.as_ref())?;
+        Self::with_reader(file)
+    }
 
-            Self::with_reader(mapped_file)
-        } else {
-            let file = File::open(dump_path)?;
+    /// Create a virtual memory reader. Shorthand for [`virt::Reader::new`].
+    pub fn virt_reader<'s>(&'s self) -> virt::Reader<'s, 'reader> {
+        virt::Reader::new(self)
+    }
 
-            Self::with_reader(file)
-        }
+    /// Create a virtual memory reader w/ a dtb. Shorthand for
+    /// [`virt::Reader::with_dtb`].
+    pub fn virt_reader_with_dtb<'s>(&'s self, dtb: Gpa) -> virt::Reader<'s, 'reader> {
+        virt::Reader::with_dtb(self, dtb)
+    }
+
+    /// Create a physical memory reader. Shorthand for [`phys::Reader::new`].
+    pub fn phys_reader<'s>(&'s self) -> phys::Reader<'s, 'reader> {
+        phys::Reader::new(self)
     }
 
     /// Get a list of every GPAs available in this dump.
@@ -363,7 +367,7 @@ impl KernelDumpParser {
             // Walk every bits.
             for bit_idx in 0u64..8 {
                 // If it's not set, go to the next.
-                if byte[0].bit(bit_idx.try_into().unwrap()) == 0 {
+                if byte[0].bit_at(bit_idx.try_into().unwrap()) == 0 {
                     continue;
                 }
 
@@ -386,43 +390,22 @@ impl KernelDumpParser {
 
     /// Build the physical memory index for [`DumpType::KernelMemory`] /
     /// [`DumpType::KernelAndUserMemory`] and [`DumpType::CompleteMemory`] dump.
-    fn kernel_physidx(dump_type: DumpType, reader: &mut impl Reader) -> Result<PhysIndex> {
-        use DumpType as D;
-        let mut page_count = 0u64;
-        let (mut page_offset, metadata_size, total_number_of_pages) = match dump_type {
-            D::KernelMemory | D::KernelAndUserMemory => {
-                let kernel_hdr = read_struct::<KernelRdmpHeader64>(reader)?;
-                if !kernel_hdr.hdr.looks_good() {
-                    return Err(Error::InvalidData("RdmpHeader64 doesn't look right"));
-                }
+    fn kernel_physidx(reader: &mut impl Reader) -> Result<PhysIndex> {
+        let krdmp = read_struct::<KernelRdmpHeader64>(reader)?;
+        if !krdmp.hdr.looks_good() {
+            return Err(Error::InvalidData("RdmpHeader64 doesn't look right"));
+        }
 
-                (
-                    kernel_hdr.hdr.first_page_offset,
-                    kernel_hdr.hdr.metadata_size,
-                    0,
-                )
-            }
-            D::CompleteMemory => {
-                let full_hdr = read_struct::<FullRdmpHeader64>(reader)?;
-                if !full_hdr.hdr.looks_good() {
-                    return Err(Error::InvalidData("FullRdmpHeader64 doesn't look right"));
-                }
-
-                (
-                    full_hdr.hdr.first_page_offset,
-                    full_hdr.hdr.metadata_size,
-                    full_hdr.total_number_of_pages,
-                )
-            }
-            _ => unreachable!(),
-        };
+        let mut page_offset = krdmp.hdr.first_page_offset;
+        let metadata_size = krdmp.hdr.metadata_size;
+        let total_number_of_pages = krdmp.phys_desc.number_of_pages;
 
         if page_offset == 0 || metadata_size == 0 {
             return Err(Error::InvalidData("no first page or metadata size"));
         }
 
         // `metadata_size` includes the [`PhysmemDesc`] already consumed
-        // as part of reading [`KernelRdmpHeader64`] / [`FullRdmpHeader64`].
+        // as part of reading [`KernelRdmpHeader64`].
         // Only the bytes between the current position and the first
         // page contain [`PfnRange`]s.
         let pfn_ranges_len = page_offset
@@ -442,34 +425,32 @@ impl KernelDumpParser {
             ));
         }
 
-        let number_pfns = pfn_ranges_len / pfn_range_size;
+        let calculated_number_pfns = pfn_ranges_len / pfn_range_size;
+        let number_of_runs = krdmp.phys_desc.number_of_runs;
+        if calculated_number_pfns != u64::from(number_of_runs) {
+            return Err(Error::InvalidData("PFN range count != number_of_runs"));
+        }
+
         let mut physmem = Builder::new();
-
-        for _ in 0..number_pfns {
-            if dump_type == D::CompleteMemory {
-                // `CompleteMemoryDump` type seems to be bound by the
-                // `total_number_of_pages` field, *not* by `metadata_size`.
-                if page_count == total_number_of_pages {
-                    break;
-                }
-
-                if page_count > total_number_of_pages {
-                    return Err(Error::InvalidData("page_count > total_number_of_pages"));
-                }
-            }
-
+        let mut page_count = 0u64;
+        for _ in 0..calculated_number_pfns {
+            // The bounded table and descriptor count delimit the ranges, not
+            // a zero PFN or an early match of the declared page total.
             let pfn_range = read_struct::<PfnRange>(reader)?;
-            if pfn_range.page_file_number == 0 {
-                break;
-            }
-
             let Some(number_of_pages) = NonZeroU64::new(pfn_range.number_of_pages) else {
                 return Err(Error::InvalidData("zero number_of_pages"));
             };
 
+            page_count = page_count
+                .checked_add(pfn_range.number_of_pages)
+                .ok_or(Error::InvalidData("overflow w/ page_count"))?;
+            if page_count > total_number_of_pages {
+                return Err(Error::InvalidData("page_count > total_number_of_pages"));
+            }
+
             // Guard against `number_of_pages` that would extend past the file.
             if !check_pages_fit(page_offset, number_of_pages, reader_len) {
-                return Err(Error::InvalidData("run doesn't fit"));
+                return Err(Error::InvalidData("pfn range doesn't fit"));
             }
 
             // Calculate the physical address of the first page..
@@ -489,10 +470,10 @@ impl KernelDumpParser {
             page_offset += pfn_range
                 .total_len()
                 .ok_or(Error::InvalidData("overflow w/ page offset"))?;
+        }
 
-            page_count = page_count
-                .checked_add(pfn_range.number_of_pages)
-                .ok_or(Error::InvalidData("overflow w/ page_count"))?;
+        if page_count != total_number_of_pages {
+            return Err(Error::InvalidData("page_count != total_number_of_pages"));
         }
 
         physmem.finish()
@@ -508,7 +489,7 @@ impl KernelDumpParser {
             D::Full => Self::full_physindex(headers, reader),
             D::Bmp | D::LiveKernelMemory => Self::bmp_physindex(reader),
             D::KernelMemory | D::KernelAndUserMemory | D::CompleteMemory => {
-                Self::kernel_physidx(dump_type, reader)
+                Self::kernel_physidx(reader)
             }
         }
     }

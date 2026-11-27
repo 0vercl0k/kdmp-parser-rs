@@ -87,17 +87,17 @@ pub(crate) fn ignore_non_fatal<T>(r: Result<T>) -> Result<Option<T>> {
 }
 
 /// A reader lets you translate & read virtual memory from a dump file.
-pub struct Reader<'parser> {
-    parser: &'parser KernelDumpParser,
+pub struct Reader<'parser, 'reader> {
+    parser: &'parser KernelDumpParser<'reader>,
     dtb: Gpa,
 }
 
-impl<'parser> Reader<'parser> {
-    pub fn new(parser: &'parser KernelDumpParser) -> Self {
+impl<'parser, 'reader> Reader<'parser, 'reader> {
+    pub fn new(parser: &'parser KernelDumpParser<'reader>) -> Self {
         Self::with_dtb(parser, Gpa::new(parser.headers().directory_table_base))
     }
 
-    pub fn with_dtb(parser: &'parser KernelDumpParser, dtb: Gpa) -> Self {
+    pub fn with_dtb(parser: &'parser KernelDumpParser<'reader>, dtb: Gpa) -> Self {
         Self { parser, dtb }
     }
 
@@ -260,7 +260,19 @@ impl<'parser> Reader<'parser> {
             total_read += amount_wanted;
             amount_left -= amount_wanted;
             // We have more work to do, so let's move to the next page.
-            addr = addr.next_aligned_page();
+            let amount_wanted =
+                u64::try_from(amount_wanted).map_err(|_| Error::InvalidData("truncation virt"))?;
+
+            // Break if we're done. This is done prior to moving the address
+            // forward to not transform a read of 1 byte at
+            // `0xffff_ffff_ffff_ffff` into an overflow error for example.
+            if amount_left == 0 {
+                break;
+            }
+
+            addr = addr
+                .checked_add(amount_wanted)
+                .ok_or(Error::InvalidData("gva overflow"))?;
         }
 
         // Yay, we read as much bytes as the user wanted!
